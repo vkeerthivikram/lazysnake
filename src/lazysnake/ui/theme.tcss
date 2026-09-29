@@ -1,0 +1,80 @@
+/* lazysnake theme — lazygit-flavoured */
+
+#body { height: 1fr; }
+
+#sidebar { width: 46; min-width: 30; }
+
+#main { width: 1fr; padding-left: 1; }
+
+StatusBar {
+    height: auto;
+    border: round $primary;
+    border-title-color: $accent;
+    padding: 0 1;
+}
+
+FilesPanel { height: 3fr; border: round $panel; }
+BranchesPanel { height: 2fr; border: round $panel; }
+CommitsPanel { height: 2fr; border: round $panel; }
+StashPanel { height: 1fr; border: round $panel; }
+TagsPanel { height: 1fr; border: round $panel; }
+
+FilesPanel:focus,
+BranchesPanel:focus,
+CommitsPanel:focus,
+StashPanel:focus,
+TagsPanel:focus {
+    border: round $accent;
+}
+
+MainView { height: 1fr; border: round $panel; }
+
+DiffView { height: 1fr; border: round $panel; overflow-x: auto; }
+DiffView ListItem { width: auto; }
+
+CommandLog { height: 8; border: round $panel; }
+
+/* ---- todo / recent / worktree modals ---- */
+
+#todo-box, #recent-box, #worktree-box, #submodule-box, #grep-box {
+    width: 84;
+    max-width: 95%;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#todo-list, #recent-list, #worktree-list, #submodule-list, #grep-list {
+    height: auto;
+    max-height: 20;
+}
+
+/* ---- modals ---- */
+
+ConfirmScreen { align: center middle; }
+CommitScreen { align: center middle; }
+
+ConfirmScreen > Vertical {
+    width: 60;
+    max-width: 90%;
+    height: auto;
+    background: $surface;
+    border: round $error;
+    padding: 1 2;
+}
+
+#commit-box {
+    width: 70;
+    max-width: 95%;
+    height: auto;
+    background: $surface;
+    border: round $accent;
+    padding: 1 2;
+}
+
+#confirm-prompt { padding-bottom: 1; }
+#confirm-buttons, #commit-buttons { height: auto; align-horizontal: center; padding-top: 1; }
+#commit-msg { height: 10; }
+#commit-label { padding-bottom: 1; }
