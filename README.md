@@ -227,3 +227,8 @@ uv run pytest          # 125 tests: parser fixtures, real temp repos (incl.
                        # a bare origin, a real submodule, and worktrees),
                        # and headless Textual pilots driving the actual UI
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
