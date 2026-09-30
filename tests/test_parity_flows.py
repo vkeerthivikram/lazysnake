@@ -226,7 +226,7 @@ def test_todo_plan_logic() -> None:
     assert len(rewords) == 1
 
 
-async def test_todo_editor_screen_flow(repo) -> None:
+async def test_todo_editor_screen_flow(repo, eventually) -> None:
     for n in ("one", "two", "three"):
         repo.write(f"{n}.txt", f"{n}\n")
         repo.commit_all(f"commit {n}")
@@ -247,8 +247,10 @@ async def test_todo_editor_screen_flow(repo) -> None:
         await pilot.press("d")
         await pilot.pause()
         await pilot.press("c")
-        for _ in range(6):
-            await pilot.pause()
-
+        await eventually(
+            lambda: (
+                [c.subject for c in app.commits] == ["commit three", "commit two", "initial commit"]
+            )
+        )
         subjects = [c.subject for c in app.commits]
         assert subjects == ["commit three", "commit two", "initial commit"]

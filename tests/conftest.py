@@ -24,6 +24,20 @@ class RepoHelper:
             text=True,
         )
         if check and proc.returncode != 0:
+            # The live app polls `git status`, which briefly takes
+            # index.lock to refresh the stat cache; a sync helper call can
+            # collide on slow runners. Retry instead of racing.
+            if "index.lock" in (proc.stderr + proc.stdout):
+                for _ in range(5):
+                    time.sleep(0.2)
+                    proc = subprocess.run(
+                        ["git", *args],
+                        cwd=self.root,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if proc.returncode == 0:
+                        break
             raise AssertionError(
                 f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}"
             )

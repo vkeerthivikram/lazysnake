@@ -64,7 +64,7 @@ async def test_submodule_update_via_app(repo, tmp_path: Path) -> None:
         assert (repo.root / "vendor" / "lib" / "lib.txt").read_text() == "lib\n"
 
 
-async def test_submodule_add_via_app(repo, tmp_path: Path) -> None:
+async def test_submodule_add_via_app(repo, tmp_path: Path, eventually) -> None:
     sub = tmp_path / "fresh"
     _make_sub(sub)
 
@@ -73,14 +73,13 @@ async def test_submodule_add_via_app(repo, tmp_path: Path) -> None:
         await app.refresh_state().wait()
         await pilot.pause()
         await app.submodule_add(str(sub), "libs/fresh").wait()
-        await pilot.pause()
-        assert (repo.root / "libs" / "fresh" / "lib.txt").exists()
+        await eventually(lambda: (repo.root / "libs" / "fresh" / "lib.txt").exists())
         # The add commits itself.
         assert repo.git("log", "-1", "--pretty=%s").strip() == "Add submodule libs/fresh"
-        assert "libs/fresh" in app.submodules
+        await eventually(lambda: "libs/fresh" in app.submodules)
 
 
-async def test_submodule_deinit_via_app(repo, tmp_path: Path) -> None:
+async def test_submodule_deinit_via_app(repo, tmp_path: Path, eventually) -> None:
     sub = tmp_path / "sublib"
     _make_sub(sub)
     _add_submodule(repo, sub)
@@ -90,9 +89,8 @@ async def test_submodule_deinit_via_app(repo, tmp_path: Path) -> None:
         await app.refresh_state().wait()
         await pilot.pause()
         await app.submodule_deinit("vendor/lib").wait()
-        await pilot.pause()
         # Worktree copy gone, .gitmodules still references it.
-        assert not (repo.root / "vendor" / "lib" / "lib.txt").exists()
+        await eventually(lambda: not (repo.root / "vendor" / "lib" / "lib.txt").exists())
         assert (repo.root / ".gitmodules").exists()
 
 

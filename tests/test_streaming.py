@@ -99,7 +99,10 @@ async def test_remote_stream_giterror_returns_failure_logs_and_refreshes(
 
         def count_refresh(*args, **kwargs):
             nonlocal refreshes
-            refreshes += 1
+            # Count only forced refreshes (the action error path); the poll
+            # timer fires unforced ones at its own pace on slow runners.
+            if kwargs.get("force") or (args and args[0] is True):
+                refreshes += 1
             return original_refresh(*args, **kwargs)
 
         async def failed_stream(*args, **kwargs):
@@ -107,9 +110,6 @@ async def test_remote_stream_giterror_returns_failure_logs_and_refreshes(
 
         monkeypatch.setattr(app, "refresh_state", count_refresh)
         monkeypatch.setattr(app.git, "run_streaming", failed_stream)
-        # The 2s poll timer also calls refresh_state; neutralize it so the
-        # count below stays exact on any runner speed.
-        monkeypatch.setattr(app, "_poll_status", lambda: None)
 
         for action, expected in (
             (app.fetch, "git fetch --all --progress"),

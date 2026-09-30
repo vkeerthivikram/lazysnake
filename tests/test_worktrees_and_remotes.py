@@ -95,8 +95,9 @@ async def test_worktree_app_flow(repo) -> None:
         assert wt_path.exists()
         assert (wt_path / ".git").exists()
         # The main repo's status stays clean of the sibling worktree.
+        # git prints forward slashes on every platform; Path str() does not.
         listing = repo.git("worktree", "list", "--porcelain")
-        assert str(wt_path) in listing
+        assert wt_path.as_posix() in listing.replace("\\", "/")
 
         await app.worktree_delete(str(wt_path)).wait()
         await pilot.pause()

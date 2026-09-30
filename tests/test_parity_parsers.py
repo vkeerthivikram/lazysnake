@@ -97,13 +97,16 @@ def test_recent_store(tmp_path: Path) -> None:
     store = tmp_path / "repos.json"
     assert load_recent(store) == []
 
-    record_recent("/a/b", store)
-    record_recent("/c/d", store)
-    record_recent("/a/b", store)  # dedupe, moves to front
-    assert load_recent(store) == ["/a/b", "/c/d"]
+    # Real paths: record_recent resolves them, and a fake POSIX path on
+    # Windows would resolve to a drive-relative path and break equality.
+    a, b = str(tmp_path / "a"), str(tmp_path / "b")
+    record_recent(a, store)
+    record_recent(b, store)
+    record_recent(a, store)  # dedupe, moves to front
+    assert load_recent(store) == [a, b]
 
     for i in range(15):
-        record_recent(f"/repo{i}", store)
+        record_recent(str(tmp_path / f"repo{i}"), store)
     entries = load_recent(store)
     assert len(entries) == 10
-    assert entries[0] == "/repo14"
+    assert entries[0] == str((tmp_path / "repo14").resolve())

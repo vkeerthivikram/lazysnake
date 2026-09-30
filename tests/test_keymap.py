@@ -58,7 +58,7 @@ def test_bind_keys_generates_working_subclass() -> None:
     assert issubclass(cls, FilesPanel)
 
 
-async def test_remapped_key_actually_fires(repo) -> None:
+async def test_remapped_key_actually_fires(repo, eventually) -> None:
     from lazysnake.git.runner import Git
     from lazysnake.git.status import parse_status
     from lazysnake.ui.app import LazysnakeApp
@@ -70,7 +70,11 @@ async def test_remapped_key_actually_fires(repo) -> None:
         await app.refresh_state().wait()
         await pilot.pause()
         await pilot.press("u")  # remapped stage key
-        await pilot.pause()
+
+        def staged_display() -> str | None:
+            return next((f.display for f in app.snapshot.files if f.path == "README.md"), None)
+
+        await eventually(lambda: staged_display() == "M ")
         snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         by_path = {f.path: f for f in snap.files}
         assert by_path["README.md"].display == "M "

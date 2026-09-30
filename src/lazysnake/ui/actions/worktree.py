@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual import work
@@ -172,9 +173,10 @@ class WorktreeActions:
     @work(exclusive=True, group="action")
     async def submodule_add(self, url: str, path: str) -> None:
         args = ["submodule", "add"]
-        if url.startswith(("/", "./", "../", "~/")):
-            # An explicitly typed local path: opt into the file transport,
-            # which git blocks by default (it only blocks file:// URLs).
+        # An explicitly typed local path (POSIX prefix, Windows drive/UNC,
+        # or any existing directory): opt into the file transport, which
+        # git blocks by default (it only blocks file:// URLs).
+        if Path(url).exists() or url.startswith(("/", "./", "../", "~/")) or url[1:3] == ":\\":
             args = ["-c", "protocol.file.allow=always", *args]
         args.extend([url, path])
         # Two commands, one error label, one trailing refresh — kept
