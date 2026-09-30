@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any, ClassVar
 
 from textual import events, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer
@@ -139,6 +139,13 @@ class LazysnakeApp(
         self._file_write_lock = asyncio.Lock()
         self._last_status_raw: str | None = None
         self._refresh_running = False
+        self._refresh_token = 0
+        # Git's index allows one writer at a time: `git status` (poll
+        # refresh) refreshes the stat cache under index.lock, checkpoints
+        # write-tree under it, restores rewrite it. Every index-touching
+        # operation acquires this lock, so the poll timer can never
+        # collide with (and block or corrupt) a user action.
+        self._git_lock = asyncio.Lock()
         self.main_source = "files"
         self._editor_task = None
 
@@ -187,17 +194,23 @@ class LazysnakeApp(
         worker coroutine it would only appear once the coroutine starts
         running, leaving a scheduling window where the poll timer could
         still cancel this refresh (and whoever awaited it) via the
-        exclusive group.
+        exclusive group. Only the NEWEST refresh may clear the flag: an
+        older worker cancelled by a newer start must not expose a
+        false-idle window while the newer one is still pending (that is
+        exactly how the poll storm cancelled awaited refreshes).
         """
         self._refresh_running = True
-        return self._refresh_state_worker(force)
+        self._refresh_token += 1
+        return self._refresh_state_worker(self._refresh_token, force)
 
     @work(exclusive=True, group="refresh")
-    async def _refresh_state_worker(self, force: bool) -> None:
+    async def _refresh_state_worker(self, token: int, force: bool) -> None:
         try:
-            await self._refresh_state_body(force)
+            async with self._git_lock:
+                await self._refresh_state_body(force)
         finally:
-            self._refresh_running = False
+            if self._refresh_token == token:
+                self._refresh_running = False
 
     async def _refresh_state_body(self, force: bool) -> None:
         try:
@@ -266,10 +279,16 @@ class LazysnakeApp(
         self.tags_panel.set_tags(self.tags)
 
     def _poll_status(self) -> None:
+        # Teardown window: a final timer tick can arrive after the screen
+        # stack is gone; self.screen raises then.
+        try:
+            screen = self.screen
+        except ScreenStackError:
+            return
         # Any modal owns the screen (whatever its class); never mutate the
         # panels underneath it. isinstance keeps this true for modals
         # added after this check was written.
-        if isinstance(self.screen, ModalScreen):
+        if isinstance(screen, ModalScreen):
             return
         # Never trample an in-flight refresh: the exclusive worker group
         # would cancel it — and the action awaiting it — just to re-read
@@ -303,31 +322,31 @@ class LazysnakeApp(
         Snapshots full state before the command so ``z`` can undo the
         actions lazysnake itself performs (reads dedupe to nothing).
         """
-        if checkpoint:
-            try:
-                await self._checkpoint()
-            except GitError as err:
-                # Fail closed: the mutation must not run on an incomplete
-                # snapshot. Log the checkpoint failure like any other —
-                # a toast alone left Windows submodule repos with an
-                # empty command log and no named cause.
-                self.command_log.write_command(
-                    "checkpoint (snapshot failed; action blocked)",
-                    ok=False,
-                    detail=str(err)[:300],
-                )
-                raise
         if kwargs.get("max_output_bytes") is not None:
             raise ValueError("bounded output is only supported by Git.run, not logged mutations")
         display = "git " + " ".join(args)
         try:
-            out = await self.git.run(*args, **kwargs)
+            async with self._git_lock:
+                if checkpoint:
+                    try:
+                        await self._checkpoint()
+                    except GitError as err:
+                        # Fail closed: the mutation must not run on an
+                        # incomplete snapshot. Log the checkpoint failure
+                        # like any other — a toast alone left Windows
+                        # submodule repos with an empty command log and no
+                        # named cause.
+                        self.command_log.write_command(
+                            "checkpoint (snapshot failed; action blocked)",
+                            ok=False,
+                            detail=str(err)[:300],
+                        )
+                        raise
+                out: str = await self.git.run(*args, **kwargs)
         except GitError as err:
             self.command_log.write_command(display, ok=False, detail=err.stderr.strip()[:300])
             raise
         self.command_log.write_command(display, ok=True)
-        if not isinstance(out, str):
-            raise TypeError("run_git expects a string result")
         return out
 
     async def _checkpoint(self, *, remove_paths: tuple[str, ...] = ()) -> Snapshot:
@@ -431,27 +450,30 @@ class LazysnakeApp(
             self.notify("Nothing left to undo", severity="warning")
             return
         target = self._undo_stack[-1]
-        try:
-            current = await capture(self.git, self._last_snapshot_commit)
-        except GitError as err:
-            self._notify_error("undo checkpoint", err)
-            return
-        self._last_snapshot_commit = current.worktree_commit
-        try:
-            await restore(self.git, target)
-        except asyncio.CancelledError:
-            rollback_error = await self._rollback_snapshot(current)
-            if rollback_error is None:
-                self.notify("Undo cancelled; repository state recovered", severity="warning")
-            else:
-                self._keep_recovery_snapshot(current, "undo", rollback_error)
-            raise
-        except Exception as err:
-            rollback_error = await self._rollback_snapshot(current)
-            if rollback_error is not None:
-                self._keep_recovery_snapshot(current, "undo", rollback_error)
-            self._report_restore_error("undo", err)
-            return
+        # Capture and restore both write the index; hold the git lock so
+        # the poll timer's status refresh cannot collide mid-restore.
+        async with self._git_lock:
+            try:
+                current = await capture(self.git, self._last_snapshot_commit)
+            except GitError as err:
+                self._notify_error("undo checkpoint", err)
+                return
+            self._last_snapshot_commit = current.worktree_commit
+            try:
+                await restore(self.git, target)
+            except asyncio.CancelledError:
+                rollback_error = await self._rollback_snapshot(current)
+                if rollback_error is None:
+                    self.notify("Undo cancelled; repository state recovered", severity="warning")
+                else:
+                    self._keep_recovery_snapshot(current, "undo", rollback_error)
+                raise
+            except Exception as err:
+                rollback_error = await self._rollback_snapshot(current)
+                if rollback_error is not None:
+                    self._keep_recovery_snapshot(current, "undo", rollback_error)
+                self._report_restore_error("undo", err)
+                return
         self._undo_stack.pop()
         self._redo_stack.append(current)
         self.notify("Undone — state restored")
@@ -468,27 +490,29 @@ class LazysnakeApp(
         if not self._redo_stack:
             return
         target = self._redo_stack[-1]
-        try:
-            current = await capture(self.git, self._last_snapshot_commit)
-        except GitError as err:
-            self._notify_error("redo checkpoint", err)
-            return
-        self._last_snapshot_commit = current.worktree_commit
-        try:
-            await restore(self.git, target)
-        except asyncio.CancelledError:
-            rollback_error = await self._rollback_snapshot(current)
-            if rollback_error is None:
-                self.notify("Redo cancelled; repository state recovered", severity="warning")
-            else:
-                self._keep_recovery_snapshot(current, "redo", rollback_error)
-            raise
-        except Exception as err:
-            rollback_error = await self._rollback_snapshot(current)
-            if rollback_error is not None:
-                self._keep_recovery_snapshot(current, "redo", rollback_error)
-            self._report_restore_error("redo", err)
-            return
+        # Same lock discipline as undo: capture/restore write the index.
+        async with self._git_lock:
+            try:
+                current = await capture(self.git, self._last_snapshot_commit)
+            except GitError as err:
+                self._notify_error("redo checkpoint", err)
+                return
+            self._last_snapshot_commit = current.worktree_commit
+            try:
+                await restore(self.git, target)
+            except asyncio.CancelledError:
+                rollback_error = await self._rollback_snapshot(current)
+                if rollback_error is None:
+                    self.notify("Redo cancelled; repository state recovered", severity="warning")
+                else:
+                    self._keep_recovery_snapshot(current, "redo", rollback_error)
+                raise
+            except Exception as err:
+                rollback_error = await self._rollback_snapshot(current)
+                if rollback_error is not None:
+                    self._keep_recovery_snapshot(current, "redo", rollback_error)
+                self._report_restore_error("redo", err)
+                return
         self._redo_stack.pop()
         self._undo_stack.append(current)
         self.notify("Redone — state restored")
@@ -531,7 +555,11 @@ class LazysnakeApp(
         """Run a user custom command when its key is otherwise unbound."""
         # Only the base screen dispatches custom commands; keys bubbling
         # out of an open modal must not fire them.
-        if self.screen is not self.default_screen:
+        try:
+            base_screen = self.screen is self.default_screen
+        except ScreenStackError:
+            return
+        if not base_screen:
             return
         # Printable keys arrive as names ("exclamation_mark"); match the
         # character too so config can simply say key = "!".

@@ -33,6 +33,7 @@ class RemoteActions:
         snapshot: RepoSnapshot
         command_log: CommandLog
         _last_status_raw: str | None
+        _git_lock: Any
         notify: Callable[..., Any]
         confirm: Callable[..., Any]
         run_worker: Callable[..., Any]
@@ -45,20 +46,21 @@ class RemoteActions:
         """Run git with live output streaming into the command log.
 
         Snapshots state first (like run_git), streams each output line as
-        it arrives, and returns the exit code without raising.
+        it arrives, and returns the exit code without raising. Checkpoint
+        and stream both touch the index, so both run under the app's git
+        lock (the poll timer's status refresh must not collide).
         """
         display = "git " + " ".join(args)
         try:
-            await self._checkpoint()
-        except GitError as err:
-            self.command_log.write_command(display, ok=False, detail=str(err)[:500])
-            return err.returncode or 1
-        self.command_log.write_output(f"▸ {display}")
-        try:
-            code, _combined = await self.git.run_streaming(
-                *args,
-                on_line=lambda text, is_err: self.command_log.write_output(text, is_stderr=is_err),
-            )
+            async with self._git_lock:
+                await self._checkpoint()
+                self.command_log.write_output(f"▸ {display}")
+                code, _combined = await self.git.run_streaming(
+                    *args,
+                    on_line=lambda text, is_err: self.command_log.write_output(
+                        text, is_stderr=is_err
+                    ),
+                )
         except GitError as err:
             self.command_log.write_command(display, ok=False, detail=str(err)[:500])
             return err.returncode or 1

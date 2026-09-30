@@ -43,25 +43,23 @@ async def test_branch_checkout_flow(repo) -> None:
         assert head == "feature/x"
 
 
-async def test_create_and_delete_branch(repo) -> None:
+async def test_create_and_delete_branch(repo, eventually) -> None:
     app = LazysnakeApp(Git(repo.root))
     async with app.run_test() as pilot:
         await app.refresh_state().wait()
         await pilot.pause()
 
         await app.create_branch("topic/y").wait()
-        await pilot.pause()
+        await eventually(lambda: any(b.name == "topic/y" and b.is_head for b in app.branches))
         head = (await app.git.run("rev-parse", "--abbrev-ref", "HEAD")).strip()
         assert head == "topic/y"
-        assert any(b.name == "topic/y" and b.is_head for b in app.branches)
 
         # Switch back to main, then delete topic/y.
         await app.checkout_branch(next(b for b in app.branches if b.name == "main")).wait()
-        await pilot.pause()
+        await eventually(lambda: app.snapshot.branch == "main")
         topic = next(b for b in app.branches if b.name == "topic/y")
         await app.delete_branch(topic).wait()
-        await pilot.pause()
-        assert all(b.name != "topic/y" for b in app.branches)
+        await eventually(lambda: all(b.name != "topic/y" for b in app.branches))
 
 
 async def test_commits_panel_and_main_view(repo) -> None:

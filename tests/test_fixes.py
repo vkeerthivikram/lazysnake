@@ -709,3 +709,38 @@ async def test_refreshed_swallows_superseded_refresh(repo) -> None:
 
     app.refresh_state = fake_refresh  # type: ignore[method-assign]
     await app._refreshed()  # must not raise
+
+
+# --------------------------------------------------- git serialization lock
+
+
+async def test_poll_storm_never_blocks_or_corrupts_actions(repo) -> None:
+    """A 20x-faster poll timer overlapping rapid mutations must never
+    cancel an action worker nor block a checkpoint with index.lock.
+
+    This is the regression test for the whole CI-storm class: git's index
+    allows one writer, `git status` (poll) and write-tree (checkpoint)
+    both write it, and only the app-wide git lock keeps them apart.
+    """
+    config = Config(poll_seconds=0.05)  # direct ctor skips the 0.5s clamp
+    app = LazysnakeApp(Git(repo.root), config=config)
+    async with app.run_test():
+        await app.refresh_state().wait()
+
+        repo.write("storm.txt", "one\n")
+        await app.stash_push().wait()  # .wait() raises on WorkerCancelled
+        await app.create_branch("storm/x").wait()
+        repo.write("storm.txt", "two\n")
+        await app.stash_push().wait()
+        await app.checkout_branch(next(b for b in app.branches if b.name == "main")).wait()
+        repo.write("storm.txt", "three\n")
+        await app.stash_push().wait()
+        await app.undo().wait()
+
+        log = "\n".join(line.text for line in app.command_log.lines)
+        assert "snapshot failed" not in log, log
+        assert "index.lock" not in log, log
+        # Storm survived: stashes happened and undo worked (exact stash
+        # bookkeeping is test_snapshot_undo's territory).
+        stash_list = (await app.git.run("stash", "list")).strip()
+        assert "stash@" in stash_list
