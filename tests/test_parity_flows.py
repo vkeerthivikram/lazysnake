@@ -62,21 +62,13 @@ async def test_files_filter(repo) -> None:
 
         app.set_filter("files", "alpha")
         await pilot.pause()
-        paths = [
-            item.entry.path
-            for item in app.files_panel.children
-            if hasattr(item, "entry")
-        ]
+        paths = [item.entry.path for item in app.files_panel.children if hasattr(item, "entry")]
         assert paths == ["alpha.py"]
         assert "alpha" in app.files_panel.border_title
 
         app.set_filter("files", None)
         await pilot.pause()
-        paths = [
-            item.entry.path
-            for item in app.files_panel.children
-            if hasattr(item, "entry")
-        ]
+        paths = [item.entry.path for item in app.files_panel.children if hasattr(item, "entry")]
         assert set(paths) == {"alpha.py", "beta.py"}
 
 
@@ -95,9 +87,7 @@ async def test_commits_filter(repo) -> None:
         app.set_filter("commits", "feat")
         await pilot.pause()
         subjects = [
-            item.commit.subject
-            for item in app.commits_panel.children
-            if hasattr(item, "commit")
+            item.commit.subject for item in app.commits_panel.children if hasattr(item, "commit")
         ]
         assert subjects == ["feat: add a"]
 
@@ -178,8 +168,9 @@ async def test_apply_commit_patch(repo) -> None:
         await pilot.pause()
         from lazysnake.git.log import Commit
 
-        gift = Commit(sha=gift_sha, short_sha=gift_sha[:7], author="T",
-                      timestamp=0, subject="gift", refs="")
+        gift = Commit(
+            sha=gift_sha, short_sha=gift_sha[:7], author="T", timestamp=0, subject="gift", refs=""
+        )
         await app.apply_commit_patch(gift).wait()
         await pilot.pause()
         assert (repo.root / "gift.txt").read_text() == "patched in\n"

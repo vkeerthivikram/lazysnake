@@ -8,7 +8,9 @@ it (unknown entries are reported, duplicates within one panel are errors).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any, ClassVar, Protocol, TypeVar, cast
 
 # panel_id -> action_id -> key
 DEFAULT_KEYS: dict[str, dict[str, str]] = {
@@ -146,14 +148,27 @@ class Keymap:
             for action, key in actions.items():
                 if key in seen:
                     problems.append(
-                        f"[keys.{panel}] '{key}' is bound to both "
-                        f"{seen[key]} and {action}"
+                        f"[keys.{panel}] '{key}' is bound to both {seen[key]} and {action}"
                     )
                 seen[key] = action
         return problems
 
 
-def bind_keys(base: type, panel: str, keymap: Keymap) -> type:
+class _ActionCarrier(Protocol):
+    """The surface :func:`bind_keys` needs: a class with an ACTIONS table.
+
+    Panels declare ``list[tuple[str, str]]`` and the app class
+    ``list[tuple[str, str, str]]`` (id, description, textual action), so
+    the member is typed loosely enough to match both.
+    """
+
+    ACTIONS: ClassVar[list[Any]]
+
+
+_ActionCarrierT = TypeVar("_ActionCarrierT", bound=_ActionCarrier)
+
+
+def bind_keys(base: type[_ActionCarrierT], panel: str, keymap: Keymap) -> type[_ActionCarrierT]:
     """Return a subclass of ``base`` with BINDINGS built from ``keymap``.
 
     ``base`` must declare ``ACTIONS``: a list of ``(action_id, description)``
@@ -163,12 +178,27 @@ def bind_keys(base: type, panel: str, keymap: Keymap) -> type:
     imports keep working.
     """
     bindings: list[tuple[str, str, str]] = []
-    for entry in base.ACTIONS:  # type: ignore[attr-defined]
+    for entry in base.ACTIONS:
         action_id, description = entry[0], entry[1]
         textual_action = entry[2] if len(entry) > 2 else action_id
         bindings.append((keymap.key(panel, action_id), textual_action, description))
     # Keep the base's __module__: Textual resolves relative CSS_PATH against
     # the class's module, and repr/pickle expect the real home.
-    return type(
-        base.__name__, (base,), {"BINDINGS": bindings, "__module__": base.__module__}
+    return cast(
+        "type[_ActionCarrierT]",
+        type(base.__name__, (base,), {"BINDINGS": bindings, "__module__": base.__module__}),
     )
+
+
+def bind(panel: str, keymap: Keymap) -> Callable[[type[_ActionCarrierT]], type[_ActionCarrierT]]:
+    """Class-decorator form of :func:`bind_keys`.
+
+    Applying the binding at class-creation time (instead of rebinding the
+    module-level name afterwards) keeps the public names usable as types
+    for both the checker and imports.
+    """
+
+    def decorator(base: type[_ActionCarrierT]) -> type[_ActionCarrierT]:
+        return bind_keys(base, panel, keymap)
+
+    return decorator

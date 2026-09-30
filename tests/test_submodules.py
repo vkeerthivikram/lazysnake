@@ -11,9 +11,7 @@ from lazysnake.ui.app import LazysnakeApp
 
 
 def _sg(sub: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-C", str(sub), *args], check=True, capture_output=True, text=True
-    )
+    subprocess.run(["git", "-C", str(sub), *args], check=True, capture_output=True, text=True)
 
 
 def _make_sub(sub: Path) -> None:
@@ -27,9 +25,7 @@ def _make_sub(sub: Path) -> None:
 
 
 def _add_submodule(repo, sub: Path) -> None:
-    repo.git(
-        "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "vendor/lib"
-    )
+    repo.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "vendor/lib")
     repo.git("commit", "-qm", "add submodule")
 
 

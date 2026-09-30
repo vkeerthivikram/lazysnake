@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from rich.text import Text
 from textual.widgets import Label, ListItem, ListView, RichLog, Static
@@ -13,8 +14,11 @@ from lazysnake.git.log import GraphCommit
 from lazysnake.git.models import FileEntry, RepoSnapshot
 from lazysnake.git.stash import StashEntry
 from lazysnake.git.tags import Tag
-from lazysnake.keymap import Keymap, bind_keys
+from lazysnake.keymap import Keymap, bind
 from lazysnake.ui.diff_render import num_column
+
+if TYPE_CHECKING:
+    from lazysnake.ui.app import LazysnakeApp
 
 DEFAULT_KEYMAP = Keymap.defaults()
 
@@ -26,6 +30,7 @@ CONFLICT_STYLE = "bold red"
 
 PANEL_BORDER = "round $panel"
 PANEL_BORDER_FOCUS = "round $accent"
+MAX_DIFF_ROWS = 2000
 
 
 class FileItem(ListItem):
@@ -51,8 +56,14 @@ class FileItem(ListItem):
         return (self.entry.path, self.staged_view)
 
 
+@bind("files", DEFAULT_KEYMAP)
 class FilesPanel(ListView):
     """Panel 1: staged and unstaged files, lazygit style."""
+
+    if TYPE_CHECKING:
+        # Panels dispatch to the composed app's action methods; narrow the
+        # widget-level `.app` property to that class for the checker.
+        app: LazysnakeApp
 
     ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("toggle_stage", "stage/unstage"),
@@ -78,7 +89,7 @@ class FilesPanel(ListView):
 
     @property
     def selected_item(self) -> FileItem | None:
-        return _selected(self, FileItem)  # type: ignore[return-value]
+        return _selected(self, FileItem)
 
     def set_files(self, files: list[FileEntry], *, filter_text: str | None = None) -> None:
         previous = self.selected_item.key if self.selected_item else None
@@ -165,7 +176,7 @@ class FilesPanel(ListView):
         if item is not None:
             self.app.open_in_editor(item.entry.path)
 
-    def action_stash_with_message(self) -> None:
+    def action_stash_message(self) -> None:
         self.app.request_stash_with_message()
 
     def action_resolve_union(self) -> None:
@@ -188,18 +199,25 @@ def _header(label: str) -> ListItem:
     return item
 
 
-def _selected(view: ListView, item_type: type):
+_SelectedT = TypeVar("_SelectedT", bound=ListItem)
+
+
+def _selected(view: ListView, item_type: type[_SelectedT]) -> _SelectedT | None:
     """Return the highlighted child of ``view`` if it is an ``item_type``."""
     idx = view.index
     if idx is None:
         return None
     children = list(view.children)
-    if 0 <= idx < len(children) and isinstance(children[idx], item_type):
-        return children[idx]
+    if 0 <= idx < len(children):
+        child = children[idx]
+        if isinstance(child, item_type):
+            return child
     return None
 
 
-def _restore_or_first(view: ListView, rows: list[ListItem], previous, item_type: type) -> None:
+def _restore_or_first(
+    view: ListView, rows: Sequence[ListItem], previous: object, item_type: type[ListItem]
+) -> None:
     restore = None
     for i, row in enumerate(rows):
         if isinstance(row, item_type) and getattr(row, "key", None) == previous:
@@ -228,8 +246,14 @@ class BranchItem(ListItem):
         super().__init__(Label(text))
 
 
+@bind("branches", DEFAULT_KEYMAP)
 class BranchesPanel(ListView):
     """Panel 2: local and remote branches."""
+
+    if TYPE_CHECKING:
+        # Panels dispatch to the composed app's action methods; narrow the
+        # widget-level `.app` property to that class for the checker.
+        app: LazysnakeApp
 
     ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("checkout", "checkout"),
@@ -248,7 +272,7 @@ class BranchesPanel(ListView):
 
     @property
     def selected_item(self) -> BranchItem | None:
-        return _selected(self, BranchItem)  # type: ignore[return-value]
+        return _selected(self, BranchItem)
 
     def set_branches(self, local: list[Branch], remote: list[Branch]) -> None:
         previous = self.selected_item.key if self.selected_item else None
@@ -325,8 +349,14 @@ class CommitItem(ListItem):
         super().__init__(Label(text))
 
 
+@bind("commits", DEFAULT_KEYMAP)
 class CommitsPanel(ListView):
     """Panel 3: commit log with git-rendered graph lanes."""
+
+    if TYPE_CHECKING:
+        # Panels dispatch to the composed app's action methods; narrow the
+        # widget-level `.app` property to that class for the checker.
+        app: LazysnakeApp
 
     ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("checkout_commit", "checkout (detached)"),
@@ -368,15 +398,17 @@ class CommitsPanel(ListView):
 
     @property
     def selected_item(self) -> CommitItem | None:
-        return _selected(self, CommitItem)  # type: ignore[return-value]
+        return _selected(self, CommitItem)
 
     def set_commits(self, graph: list[GraphCommit], *, filter_text: str | None = None) -> None:
         previous = self.selected_item.key if self.selected_item else None
         self.clear()
         needle = (filter_text or "").lower()
-        entries = [
-            g for g in graph if not needle or needle in g.commit.subject.lower()
-        ] if needle else graph
+        entries = (
+            [g for g in graph if not needle or needle in g.commit.subject.lower()]
+            if needle
+            else graph
+        )
         self._base_title = "3 Commits" + (f"  /{filter_text}/" if needle else "")
         self.border_title = self._base_title + self._patch_suffix
         if not entries:
@@ -488,8 +520,14 @@ class StashItem(ListItem):
         super().__init__(Label(text))
 
 
+@bind("stash", DEFAULT_KEYMAP)
 class StashPanel(ListView):
     """Panel 4: stash entries."""
+
+    if TYPE_CHECKING:
+        # Panels dispatch to the composed app's action methods; narrow the
+        # widget-level `.app` property to that class for the checker.
+        app: LazysnakeApp
 
     ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("apply_stash", "apply"),
@@ -503,7 +541,7 @@ class StashPanel(ListView):
 
     @property
     def selected_item(self) -> StashItem | None:
-        return _selected(self, StashItem)  # type: ignore[return-value]
+        return _selected(self, StashItem)
 
     def set_stash(self, entries: list[StashEntry]) -> None:
         previous = self.selected_item.key if self.selected_item else None
@@ -545,8 +583,14 @@ class TagItem(ListItem):
         super().__init__(Label(text))
 
 
+@bind("tags", DEFAULT_KEYMAP)
 class TagsPanel(ListView):
     """Panel 5: tags."""
+
+    if TYPE_CHECKING:
+        # Panels dispatch to the composed app's action methods; narrow the
+        # widget-level `.app` property to that class for the checker.
+        app: LazysnakeApp
 
     ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("checkout_tag", "checkout (detached)"),
@@ -560,7 +604,7 @@ class TagsPanel(ListView):
 
     @property
     def selected_item(self) -> TagItem | None:
-        return _selected(self, TagItem)  # type: ignore[return-value]
+        return _selected(self, TagItem)
 
     def set_tags(self, tags: list[Tag]) -> None:
         previous = self.selected_item.key if self.selected_item else None
@@ -648,8 +692,14 @@ class DiffRow(ListItem):
         super().__init__(Label(text))
 
 
+@bind("diff", DEFAULT_KEYMAP)
 class DiffView(ListView):
     """Interactive unified diff: space stages the hunk, l stages the line."""
+
+    if TYPE_CHECKING:
+        # Panels dispatch to the composed app's action methods; narrow the
+        # widget-level `.app` property to that class for the checker.
+        app: LazysnakeApp
 
     ACTIONS: ClassVar[list[tuple[str, str]]] = [
         ("stage_hunk", "stage hunk"),
@@ -666,7 +716,7 @@ class DiffView(ListView):
 
     @property
     def selected_row(self) -> DiffRow | None:
-        return _selected(self, DiffRow)  # type: ignore[return-value]
+        return _selected(self, DiffRow)
 
     def set_diff(self, fd: FileDiff, *, reverse: bool, note: str | None = None) -> None:
         self.current_fd = fd
@@ -676,12 +726,22 @@ class DiffView(ListView):
         if reverse:
             title += "  [staged]"
         self.border_title = title
+        expected_rows = (1 if note else 0) + sum(1 + len(hunk.lines) for hunk in fd.hunks)
+        truncated = fd.truncated or expected_rows > MAX_DIFF_ROWS
+        row_limit = MAX_DIFF_ROWS - (1 if truncated else 0)
+        row_count = 0
         if note:
             self.append(_header(note))
+            row_count += 1
         for hi, hunk in enumerate(fd.hunks):
+            hunk_rows = 1 + len(hunk.lines)
+            if row_count + hunk_rows > row_limit:
+                truncated = True
+                break
             self.append(
                 DiffRow(Text(hunk.raw_header, style="bold cyan"), kind="hunk", hunk_index=hi)
             )
+            row_count += 1
             for li, pl in enumerate(hunk.lines):
                 self.append(
                     DiffRow(
@@ -691,6 +751,9 @@ class DiffView(ListView):
                         line_index=li,
                     )
                 )
+            row_count += len(hunk.lines)
+        if truncated:
+            self.append(_header("Diff truncated; remaining hunks hidden"))
 
     def action_stage_hunk(self) -> None:
         self.app.stage_from_diff("hunk")
@@ -733,14 +796,3 @@ class CommandLog(RichLog):
     def write_output(self, text: str, *, is_stderr: bool = False) -> None:
         """Live output line from a streaming command (remote push/pull etc.)."""
         self.write(Text(text, style="dim red" if is_stderr else "dim"))
-
-
-# Panels are declared with ACTION tables; keys come from the keymap. The
-# module-level names are the default-keyed subclasses (remapping creates
-# further subclasses of these at runtime).
-FilesPanel = bind_keys(FilesPanel, "files", DEFAULT_KEYMAP)
-BranchesPanel = bind_keys(BranchesPanel, "branches", DEFAULT_KEYMAP)
-CommitsPanel = bind_keys(CommitsPanel, "commits", DEFAULT_KEYMAP)
-StashPanel = bind_keys(StashPanel, "stash", DEFAULT_KEYMAP)
-TagsPanel = bind_keys(TagsPanel, "tags", DEFAULT_KEYMAP)
-DiffView = bind_keys(DiffView, "diff", DEFAULT_KEYMAP)

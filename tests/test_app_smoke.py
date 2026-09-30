@@ -48,9 +48,7 @@ async def test_space_stages_selected_file(repo) -> None:
         await pilot.press("space")
         await pilot.pause()
 
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         by_path = {f.path: f for f in snap.files}
         assert by_path["README.md"].display == "M "
 
@@ -67,9 +65,7 @@ async def test_toggle_stage_unstages(repo) -> None:
         await app.toggle_stage(app.files_panel.selected_item.entry, staged_view=True).wait()
         await pilot.pause()
 
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         by_path = {f.path: f for f in snap.files}
         assert by_path["README.md"].display == " M"
 
@@ -101,16 +97,12 @@ async def test_stage_all_and_unstage_all(repo) -> None:
 
         await app.toggle_stage_all().wait()
         await pilot.pause()
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         assert all(f.staged for f in snap.files)
 
         await app.toggle_stage_all().wait()
         await pilot.pause()
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         assert not any(f.staged for f in snap.files)
 
 
@@ -125,7 +117,5 @@ async def test_discard_untracked(repo) -> None:
         await app.discard(app.files_panel.selected_item.entry).wait()
         await pilot.pause()
 
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         assert not any(f.path == "junk.txt" for f in snap.files)

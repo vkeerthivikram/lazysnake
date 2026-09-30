@@ -56,9 +56,7 @@ async def test_checkout_remote_branch(remote_repo) -> None:
         await app.checkout_branch(item).wait()
         await pilot.pause()
         assert remote_repo.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "feature"
-        upstream = remote_repo.git(
-            "rev-parse", "--abbrev-ref", "feature@{upstream}"
-        ).strip()
+        upstream = remote_repo.git("rev-parse", "--abbrev-ref", "feature@{upstream}").strip()
         assert upstream == "origin/feature"
 
 
@@ -128,9 +126,7 @@ async def test_enter_submodule_switches(repo, tmp_path: Path) -> None:
     import subprocess
 
     def sg(*args: str) -> None:
-        subprocess.run(
-            ["git", "-C", str(sub), *args], check=True, capture_output=True, text=True
-        )
+        subprocess.run(["git", "-C", str(sub), *args], check=True, capture_output=True, text=True)
 
     sg("init", "-q", "-b", "main")
     sg("config", "user.email", "t@e")
@@ -139,9 +135,7 @@ async def test_enter_submodule_switches(repo, tmp_path: Path) -> None:
     sg("add", "-A")
     sg("commit", "-qm", "lib init")
 
-    repo.git(
-        "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "vendor/lib"
-    )
+    repo.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "vendor/lib")
     repo.git("commit", "-qm", "add submodule")
 
     app = LazysnakeApp(Git(repo.root))

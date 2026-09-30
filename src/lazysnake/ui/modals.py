@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from rich.text import Text
+from textual.app import ComposeResult
+from textual.binding import BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, ListItem, ListView, TextArea
 
+from lazysnake.git.submodule import Submodule
 from lazysnake.git.worktree import Worktree
 from lazysnake.rebase import TodoPlan
+
+MAX_GREP_MATCHES = 200
 
 
 class ConfirmScreen(ModalScreen[bool]):
     """Ask before destructive git operations. Dismisses with True/False."""
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancel"),
         ("y", "confirm", "Confirm"),
         ("n", "cancel", "Cancel"),
@@ -27,7 +33,7 @@ class ConfirmScreen(ModalScreen[bool]):
         self.prompt = prompt
         self.danger = danger
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self.prompt, id="confirm-prompt")
             with Horizontal(id="confirm-buttons"):
@@ -49,7 +55,7 @@ class ConfirmScreen(ModalScreen[bool]):
 class CommitScreen(ModalScreen[str]):
     """Editor for the commit message. Dismisses with the text or None."""
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "Cancel"),
         ("ctrl+enter", "submit", "Commit"),
     ]
@@ -59,7 +65,7 @@ class CommitScreen(ModalScreen[str]):
         super().__init__()
         self.prefill = prefill
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="commit-box"):
             yield Label("Commit message:", id="commit-label")
             yield TextArea(self.prefill, id="commit-msg")
@@ -85,18 +91,19 @@ class CommitScreen(ModalScreen[str]):
 class InputScreen(ModalScreen[str]):
     """Single-line text input (e.g. new branch name). Dismisses with text or None."""
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[BindingType]] = [("escape", "cancel", "Cancel")]
     AUTO_FOCUS = "#input-field"
 
-    def __init__(self, prompt: str, *, placeholder: str = "") -> None:
+    def __init__(self, prompt: str, *, placeholder: str = "", prefill: str = "") -> None:
         super().__init__()
         self.prompt = prompt
         self.placeholder = placeholder
+        self.prefill = prefill
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="input-box"):
             yield Label(self.prompt, id="input-label")
-            yield Input(placeholder=self.placeholder, id="input-field")
+            yield Input(value=self.prefill, placeholder=self.placeholder, id="input-field")
             with Horizontal(id="input-buttons"):
                 yield Button("OK", id="input-ok", variant="success")
                 yield Button("Cancel", id="cancel-btn")
@@ -139,14 +146,23 @@ class _TodoRow(ListItem):
         super().__init__(Label(text))
 
 
-class RebaseTodoScreen(ModalScreen[dict]):
+@dataclass
+class RebaseTodoResult:
+    """What the todo editor decided: verbs, order, and a reword message."""
+
+    ops: dict[str, str]
+    order: list[str]
+    message: str | None = None
+
+
+class RebaseTodoScreen(ModalScreen[RebaseTodoResult]):
     """Full interactive-rebase todo editor.
 
-    Dismisses with ``{"ops", "order", "message"}`` on run, or ``None``.
+    Dismisses with a :class:`RebaseTodoResult` on run, or ``None``.
     Keys: p/r/e/s/f/d set verbs, </> move, c or enter runs, escape cancels.
     """
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "cancel"),
         ("p", "verb('pick')", "pick"),
         ("r", "verb('reword')", "reword"),
@@ -164,7 +180,7 @@ class RebaseTodoScreen(ModalScreen[dict]):
         super().__init__()
         self.plan = plan
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="todo-box"):
             yield Label(
                 "Rebase plan (oldest first): p pick · r reword · e edit · "
@@ -214,9 +230,7 @@ class RebaseTodoScreen(ModalScreen[dict]):
 
     def action_run(self) -> None:
         ops, order = self.plan.build()
-        self.dismiss(
-            {"ops": ops, "order": order, "message": self.plan.reword_message}
-        )
+        self.dismiss(RebaseTodoResult(ops=ops, order=order, message=self.plan.reword_message))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -225,7 +239,7 @@ class RebaseTodoScreen(ModalScreen[dict]):
 class RecentReposScreen(ModalScreen[str]):
     """Pick a recently opened repository. Dismisses with its path or None."""
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "cancel"),
         ("enter", "choose", "open"),
     ]
@@ -235,7 +249,7 @@ class RecentReposScreen(ModalScreen[str]):
         self.paths = [p for p in paths if p != current][:9] or [p for p in paths][:9]
         self.current = current
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="recent-box"):
             yield Label("Recent repositories (enter to open, esc to cancel):")
             yield ListView(id="recent-list")
@@ -280,42 +294,57 @@ class _GrepRow(ListItem):
         )
 
 
-class GrepScreen(ModalScreen[dict]):
-    """Grep results. Dismisses with ``{"path", "line"}`` on enter,
-    ``{"path", "line", "stage": True}`` on space, or ``None``."""
+@dataclass
+class GrepMatch:
+    """One selected grep result: where to jump, and whether to stage first."""
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    path: str
+    line: int
+    text: str
+    stage: bool = False
+
+
+class GrepScreen(ModalScreen[GrepMatch]):
+    """Grep results. Dismisses with a :class:`GrepMatch` on enter (``stage``
+    False) or space (``stage`` True), or ``None``."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "cancel"),
         ("enter", "jump", "go to match"),
         ("space", "jump_stage", "go + stage file"),
     ]
 
-    def __init__(self, matches: list[tuple[str, int, str]], term: str) -> None:
+    def __init__(
+        self, matches: list[tuple[str, int, str]], term: str, *, truncated: bool = False
+    ) -> None:
         super().__init__()
-        self.matches = matches
+        self.matches = matches[:MAX_GREP_MATCHES]
+        self.truncated = truncated or len(matches) > MAX_GREP_MATCHES
         self.term = term
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="grep-box"):
-            yield Label(f"grep '{self.term}' — {len(self.matches)} matches "
-                        "(enter jump · space jump+stage · esc):")
+            count = f"{len(self.matches)} matches"
+            if self.truncated:
+                count += f" (truncated to first {MAX_GREP_MATCHES}; more omitted)"
+            yield Label(f"grep '{self.term}' — {count} (enter jump · space jump+stage · esc):")
             yield ListView(id="grep-list")
 
     def on_mount(self) -> None:
         view = self.query_one("#grep-list", ListView)
-        for path, line_no, text in self.matches[:200]:
+        for path, line_no, text in self.matches:
             view.append(_GrepRow(path, line_no, text))
         if self.matches:
             view.index = 0
         view.focus()
 
-    def _selection(self, *, stage: bool) -> dict | None:
+    def _selection(self, *, stage: bool) -> GrepMatch | None:
         view = self.query_one("#grep-list", ListView)
         idx = view.index
         if idx is None or not 0 <= idx < len(self.matches):
             return None
-        path, line_no, _text = self.matches[idx]
-        return {"path": path, "line": line_no, "stage": stage}
+        path, line_no, text = self.matches[idx]
+        return GrepMatch(path=path, line=line_no, text=text, stage=stage)
 
     def action_jump(self) -> None:
         self.dismiss(self._selection(stage=False))
@@ -344,7 +373,7 @@ class _WorktreeRow(ListItem):
 
 
 class _SubmoduleRow(ListItem):
-    def __init__(self, sub) -> None:
+    def __init__(self, sub: Submodule) -> None:
         self.submodule = sub
         flag_style = {"+": "yellow", "-": "red", "U": "red"}.get(sub.flag, "green")
         super().__init__(
@@ -357,14 +386,19 @@ class _SubmoduleRow(ListItem):
         )
 
 
-class SubmodulesScreen(ModalScreen[dict]):
-    """Submodule manager. Dismisses with an action dict or None.
+@dataclass
+class SubmoduleResult:
+    """Chosen submodule action: ``enter``/``update``/``deinit`` carry a
+    ``path``; ``add`` does not."""
 
-    Actions: ``{"action": "enter"|"update"|"deinit", "path": …}`` or
-    ``{"action": "add"}``.
-    """
+    action: str
+    path: str | None = None
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+
+class SubmodulesScreen(ModalScreen[SubmoduleResult]):
+    """Submodule manager. Dismisses with a :class:`SubmoduleResult` or None."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "cancel"),
         ("enter", "enter_sub", "open"),
         ("u", "update", "update --init"),
@@ -372,11 +406,11 @@ class SubmodulesScreen(ModalScreen[dict]):
         ("d", "deinit", "deinit"),
     ]
 
-    def __init__(self, subs: list) -> None:
+    def __init__(self, subs: list[Submodule]) -> None:
         super().__init__()
         self.subs = subs
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="submodule-box"):
             yield Label("Submodules (enter open · u update · a add · d deinit · esc):")
             yield ListView(id="submodule-list")
@@ -399,30 +433,36 @@ class SubmodulesScreen(ModalScreen[dict]):
     def action_enter_sub(self) -> None:
         path = self._selected_path()
         if path:
-            self.dismiss({"action": "enter", "path": path})
+            self.dismiss(SubmoduleResult(action="enter", path=path))
 
     def action_update(self) -> None:
-        self.dismiss({"action": "update"})
+        self.dismiss(SubmoduleResult(action="update"))
 
     def action_add(self) -> None:
-        self.dismiss({"action": "add"})
+        self.dismiss(SubmoduleResult(action="add"))
 
     def action_deinit(self) -> None:
         path = self._selected_path()
         if path:
-            self.dismiss({"action": "deinit", "path": path})
+            self.dismiss(SubmoduleResult(action="deinit", path=path))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
 
-class WorktreeScreen(ModalScreen[dict]):
-    """Worktree browser. Dismisses with an action dict or None.
+@dataclass
+class WorktreeResult:
+    """Chosen worktree action: ``switch``/``delete`` carry a ``path``;
+    ``add`` does not."""
 
-    Actions: ``{"switch", path}``, ``{"add"}``, ``{"delete", path}``.
-    """
+    action: str
+    path: str | None = None
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+
+class WorktreeScreen(ModalScreen[WorktreeResult]):
+    """Worktree browser. Dismisses with a :class:`WorktreeResult` or None."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("escape", "cancel", "cancel"),
         ("enter", "switch", "open"),
         ("n", "add", "new worktree"),
@@ -433,7 +473,7 @@ class WorktreeScreen(ModalScreen[dict]):
         super().__init__()
         self.worktrees = worktrees
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         with Vertical(id="worktree-box"):
             yield Label("Worktrees (enter open · n new · d remove · esc cancel):")
             yield ListView(id="worktree-list")
@@ -456,15 +496,15 @@ class WorktreeScreen(ModalScreen[dict]):
     def action_switch(self) -> None:
         path = self._selected_path()
         if path:
-            self.dismiss({"action": "switch", "path": path})
+            self.dismiss(WorktreeResult(action="switch", path=path))
 
     def action_add(self) -> None:
-        self.dismiss({"action": "add"})
+        self.dismiss(WorktreeResult(action="add"))
 
     def action_delete(self) -> None:
         path = self._selected_path()
         if path:
-            self.dismiss({"action": "delete", "path": path})
+            self.dismiss(WorktreeResult(action="delete", path=path))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

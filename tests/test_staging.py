@@ -16,9 +16,7 @@ async def _make_two_hunk_repo(repo) -> Git:
     """A repo whose tracked file has two independent modified hunks."""
     repo.write("file.txt", SEED)
     repo.commit_all("seed file")
-    changed = SEED.replace("line 2\n", "line 2 changed\n").replace(
-        "line 14\n", "line 14 changed\n"
-    )
+    changed = SEED.replace("line 2\n", "line 2 changed\n").replace("line 14\n", "line 14 changed\n")
     repo.write("file.txt", changed)
     return Git(repo.root)
 

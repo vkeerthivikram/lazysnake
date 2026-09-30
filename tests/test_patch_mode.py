@@ -110,8 +110,12 @@ async def test_cherry_pick_conflict_then_smart_continue(repo) -> None:
         from lazysnake.git.log import Commit
 
         theirs = Commit(
-            sha=their_sha, short_sha=their_sha[:7], author="T", timestamp=0,
-            subject="their change", refs="",
+            sha=their_sha,
+            short_sha=their_sha[:7],
+            author="T",
+            timestamp=0,
+            subject="their change",
+            refs="",
         )
         try:
             await app.cherry_pick(theirs).wait()

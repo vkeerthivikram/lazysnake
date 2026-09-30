@@ -27,9 +27,7 @@ async def test_push_sets_upstream_then_plain_push(remote_repo) -> None:
         await app.refresh_state(force=True).wait()
         await app.push().wait()
         await pilot.pause()
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         assert snap.ahead == 0
 
 
@@ -53,9 +51,7 @@ async def test_ahead_behind_and_fetch(remote_repo) -> None:
         await pilot.pause()
         await app.fetch().wait()
         await pilot.pause()
-        snap = parse_status(
-            await app.git.run("status", "--porcelain=v2", "--branch", "-z")
-        )
+        snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         # We reset the local branch to the pre-push commit, origin has one more.
         assert snap.behind >= 1 or snap.ahead >= 1  # direction depends on state
 

@@ -11,12 +11,23 @@ def test_defaults_cover_every_action() -> None:
     # Every panel with ACTIONS has a key for each action.
     from lazysnake.ui import panels
 
-    for name in ("FilesPanel", "BranchesPanel", "CommitsPanel", "StashPanel",
-                 "TagsPanel", "DiffView"):
+    for name in (
+        "FilesPanel",
+        "BranchesPanel",
+        "CommitsPanel",
+        "StashPanel",
+        "TagsPanel",
+        "DiffView",
+    ):
         cls = getattr(panels, name)
-        panel = {"FilesPanel": "files", "BranchesPanel": "branches",
-                 "CommitsPanel": "commits", "StashPanel": "stash",
-                 "TagsPanel": "tags", "DiffView": "diff"}[name]
+        panel = {
+            "FilesPanel": "files",
+            "BranchesPanel": "branches",
+            "CommitsPanel": "commits",
+            "StashPanel": "stash",
+            "TagsPanel": "tags",
+            "DiffView": "diff",
+        }[name]
         for entry in cls.ACTIONS:
             action_id = entry[0]
             assert action_id in DEFAULT_KEYS[panel], f"{panel}.{action_id} unmapped"
@@ -75,9 +86,7 @@ async def test_remapped_key_actually_fires(repo) -> None:
 
 def test_config_keys_section(tmp_path) -> None:
     target = tmp_path / "config.toml"
-    target.write_text(
-        '[keys.files]\ncommit = "K"\n\n[keys.global]\nundo = "ctrl+z"\n'
-    )
+    target.write_text('[keys.files]\ncommit = "K"\n\n[keys.global]\nundo = "ctrl+z"\n')
     cfg = load_config(target)
     assert cfg.key_overrides == {
         "files": {"commit": "K"},
@@ -94,3 +103,55 @@ def test_global_action_id_maps_to_textual_action() -> None:
     app_cls = bind_keys(LazysnakeApp, "global", km)
     bindings = {action: key for key, action, _ in app_cls.BINDINGS}
     assert bindings["focus_panel('files')"] == "F1"
+
+
+def test_every_bound_action_resolves_to_a_method() -> None:
+    # Every binding Textual generates must name a method the target class
+    # actually has (action_<id>, or the explicit textual action for entries
+    # that carry one). A miss means the key is dead: pressed, nothing happens.
+    from lazysnake.ui import panels
+    from lazysnake.ui.app import LazysnakeApp
+
+    targets = [
+        (panels.FilesPanel, "files"),
+        (panels.BranchesPanel, "branches"),
+        (panels.CommitsPanel, "commits"),
+        (panels.StashPanel, "stash"),
+        (panels.TagsPanel, "tags"),
+        (panels.DiffView, "diff"),
+        (LazysnakeApp, "global"),
+    ]
+    for cls, panel in targets:
+        for entry in cls.ACTIONS:
+            action_id, textual_action = entry[0], (entry[2] if len(entry) > 2 else entry[0])
+            # Textual action strings may carry arguments: focus_panel('files')
+            method = f"action_{textual_action.split('(')[0]}"
+            assert hasattr(cls, method), (
+                f"{panel}.{action_id} is bound to key "
+                f"{DEFAULT_KEYS[panel][action_id]!r} but {cls.__name__} has no {method}"
+            )
+
+
+async def test_stash_message_key_opens_input_and_stashes(repo) -> None:
+    from lazysnake.git.runner import Git
+    from lazysnake.ui.app import LazysnakeApp
+    from lazysnake.ui.modals import InputScreen
+
+    repo.write("README.md", "work in progress\n")
+    app = LazysnakeApp(Git(repo.root))
+    async with app.run_test() as pilot:
+        await app.refresh_state().wait()
+        await pilot.pause()
+        app.files_panel.focus()
+        await pilot.press("S")
+        await pilot.pause()
+        assert isinstance(app.screen, InputScreen)
+
+        # Complete the flow through the keyboard: type, submit.
+        for ch in "checkpoint before refactor":
+            await pilot.press(ch)
+        await pilot.press("enter")
+        await pilot.pause()
+        listing = await app.git.run("stash", "list")
+        assert "checkpoint before refactor" in listing
+        assert len(app.stash) == 1

@@ -34,7 +34,7 @@ async def test_merge_conflict_and_resolve(repo) -> None:
 
         snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         assert snap.in_conflict
-        assert merge_in_progress(repo.root)
+        assert await merge_in_progress(app.git)
         conflicted = snap.conflict_files[0]
         assert conflicted.path == "README.md"
 
@@ -46,7 +46,7 @@ async def test_merge_conflict_and_resolve(repo) -> None:
 
         snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         assert not snap.in_conflict
-        assert not merge_in_progress(repo.root)
+        assert not await merge_in_progress(app.git)
         assert (repo.root / "README.md").read_text() == "our version\n"
         subjects = [c.subject for c in app.commits]
         assert subjects[0] == "merge done"
@@ -90,7 +90,7 @@ def test_config_tolerates_garbage(tmp_path: Path) -> None:
     cfg = load_config(target)
     assert cfg == Config()
 
-    target.write_text("sidebar_width = \"wide\"\npoll_seconds = -3\n")
+    target.write_text('sidebar_width = "wide"\npoll_seconds = -3\n')
     cfg = load_config(target)
     # bad type falls back; out-of-range is clamped, not fatal
     assert cfg.sidebar_width == 46

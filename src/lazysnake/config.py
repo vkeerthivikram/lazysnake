@@ -7,8 +7,10 @@ a malformed config never stops the app from starting.
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 CONFIG_PATH = Path.home() / ".config" / "lazysnake" / "config.toml"
 
@@ -62,11 +64,7 @@ def _parse_keys(raw: object) -> dict[str, dict[str, str]]:
     for panel, actions in raw.items():
         if not isinstance(actions, dict):
             continue
-        table = {
-            str(action): str(key)
-            for action, key in actions.items()
-            if action and key
-        }
+        table = {str(action): str(key) for action, key in actions.items() if action and key}
         if table:
             overrides[str(panel)] = table
     return overrides
@@ -80,7 +78,9 @@ def load_config(path: Path | None = None) -> Config:
     except (OSError, tomllib.TOMLDecodeError):
         return Config()
 
-    def get(key: str, default, cast):
+    _ValueT = TypeVar("_ValueT")
+
+    def get(key: str, default: _ValueT, cast: Callable[..., _ValueT]) -> _ValueT:
         value = raw.get(key, default)
         try:
             return cast(value)
@@ -88,7 +88,9 @@ def load_config(path: Path | None = None) -> Config:
             return default
 
     return Config(
-        sidebar_width=max(20, get("sidebar_width", 46, int)),
+        # The layout CSS enforces min-width: 30 on #sidebar; keep the
+        # clamp at the same floor so config cannot promise what CSS denies.
+        sidebar_width=max(30, get("sidebar_width", 46, int)),
         poll_seconds=min(60.0, max(0.5, get("poll_seconds", 2.0, float))),
         log_limit=max(50, get("log_limit", 500, int)),
         custom_commands=tuple(_parse_custom(raw.get("custom"))),
