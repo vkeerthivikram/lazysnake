@@ -37,7 +37,7 @@ Legend: ✅ done & tested · ⚠️ partial
 | History | commit-graph lanes | ✅ |
 | History | apply commit patch to worktree (`w`) | ✅ |
 | History | patch mode: mark range, apply/cherry-pick onto any branch (`m`/`a`/`c`) | ✅ |
-| History | undo / redo of lazysnake actions (`z` / `ctrl+y`) | ✅ full-state snapshots: HEAD, index, worktree, untracked files, stash list |
+| History | undo / redo of lazysnake actions (`z` / `ctrl+y`) | ✅ snapshots: symbolic HEAD, saved ref tips, exact index, worktree, untracked files, stash and conflict state |
 | Branches | checkout / create / delete / force delete | ✅ |
 | Branches | merge, fast-forward, rebase onto | ✅ |
 | Branches | set upstream | ✅ |
@@ -66,7 +66,7 @@ Legend: ✅ done & tested · ⚠️ partial
 ```sh
 uv sync                 # create venv and install dependencies
 uv run lazysnake        # run inside any git repository
-uv run pytest           # run the test suite (125 tests)
+uv run pytest           # run the test suite
 uv run ruff check .     # lint
 ```
 
@@ -77,7 +77,7 @@ Or point it at a repo explicitly: `uv run lazysnake ~/code/myproject`.
 Optional TOML at `~/.config/lazysnake/config.toml`:
 
 ```toml
-sidebar_width = 46   # left column width in cells (min 20)
+sidebar_width = 46   # left column width in cells (min 30)
 poll_seconds  = 2.0  # background status refresh interval (0.5–60)
 log_limit     = 500  # commits fetched for the log panel
 
@@ -116,7 +116,7 @@ Defaults below; every one is remappable via `[keys]`.
 | `f` / `p` / `P` | fetch / pull / push (live output in command log) |
 | `R` | continue whichever sequencer is active: cherry-pick, merge, or rebase (skips empty picks) |
 | `K` | abort rebase |
-| `z` / `ctrl+y` | undo / redo last lazysnake action — restores HEAD, index, worktree, untracked files and stashes exactly |
+| `z` / `ctrl+y` | undo / redo last lazysnake action — restores HEAD, saved ref tips, index, worktree, untracked files, stashes and conflict state |
 | `[` / `]` | less / more diff context |
 | `ctrl+g` | grep tracked files |
 | `ctrl+r` | recent repositories |
@@ -215,20 +215,56 @@ machine-readable formats (`--porcelain=v2 -z`, unit-separated log fields).
 No pygit2, no compiled dependencies.
 
 Undo works the way lazygit's does: before every mutating action lazysnake
-captures a full snapshot (HEAD, index tree, worktree content including
-untracked files via a temporary index, and the stash list), anchored in a
-commit chain on `refs/lazysnake/snapshots`; undo/redo restore that state
-exactly.
+captures symbolic/detached HEAD, saved local ref tips, exact index bytes
+(including conflict stages), Git merge/rebase state, worktree content
+(including untracked files via a temporary index), and the stash list. The
+snapshot is anchored in a commit chain on `refs/lazysnake/snapshots`. Restore
+rewinds the checked-out branch tip and recreates refs deleted since the
+checkpoint, but leaves other existing tips and refs created later untouched.
+Untracked files created outside lazysnake after a checkpoint are also left
+alone.
+
+## Platform notes
+
+On POSIX systems, timed-out or cancelled Git and custom-shell commands are
+terminated as process groups. Windows keeps its normal subprocess launch
+behavior; without POSIX process groups, cleanup can terminate only the
+direct child and a spawned grandchild may outlive it. Process-tree integration
+tests run on Linux and were not verified on Windows.
 
 ## Testing
 
 ```sh
-uv run pytest          # 125 tests: parser fixtures, real temp repos (incl.
-                       # a bare origin, a real submodule, and worktrees),
-                       # and headless Textual pilots driving the actual UI
+uv run pytest
 ```
+
+Parser fixtures feed recorded porcelain/log output to the parsers;
+repository fixtures drive real temp repos (a bare origin for remote flows,
+a real submodule, linked worktrees); UI tests run the actual app headless
+via Textual's `Pilot`.
+
+## Contributing
+
+```sh
+uv sync                 # set up the venv
+uv run pytest           # keep the suite green
+uv run ruff check .     # lint
+uv run ruff format .    # format
+```
+
+Keep tests green and ruff clean; code lands under MIT.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| ------- | ------------- |
+| `lazysnake: not a git repository: <path>` at startup | Started outside a repository; exits 1. Run inside one or pass a path: `uv run lazysnake ~/code/myproject`. |
+| `$EDITOR` never opens for commit / amend / reword | By design: those use the built-in dialog (`ctrl+enter` submits). `$EDITOR`/`$VISUAL` is only consulted by `E` (open file) — unset, it warns and does nothing. git itself never waits on an editor (`GIT_EDITOR` is pinned to `true`). |
+| `y` / `Y` copy does nothing over SSH | Copy emits an OSC 52 sequence; the terminal must honor it (kitty, WezTerm, alacritty, foot do; macOS Terminal and gnome-terminal do not). The toast still shows the copied text either way. |
+| `config.toml` changes seem ignored | A malformed file never blocks startup — defaults apply silently. Unknown `[keys]` sections or action ids, and duplicate keys within a panel, are reported as `keymap:` warning notifications at startup. |
+| Tests fail on an old git | Fixtures create repos with `git init -b main`, which needs git ≥ 2.28. The app itself only parses `git status --porcelain=v2` (git ≥ 2.11). |
+| UI cramped in a small terminal | No hard minimum is enforced: the sidebar is fixed-width (46 cells by default) and the commit dialog is 84 wide, so narrow windows squeeze the panes. Widen the terminal or lower `sidebar_width`. |
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-

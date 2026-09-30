@@ -1,27 +1,50 @@
 [project]
 name = "lazysnake"
-version = "0.1.0"
 description = "A lazygit-style TUI for git, written in Python"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = [
-    "textual>=1.0",
+authors = [{ name = "vkeerthivikram" }]
+keywords = ["git", "tui", "lazygit", "textual", "terminal"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Version Control :: Git",
 ]
+dependencies = [
+    "textual>=8.2",
+]
+dynamic = ["version"]
 
 [project.scripts]
 lazysnake = "lazysnake.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/vkeerthivikram/lazysnake"
+Issues = "https://github.com/vkeerthivikram/lazysnake/issues"
+Changelog = "https://github.com/vkeerthivikram/lazysnake/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
+    "mypy>=1.14",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "ruff>=0.8",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/lazysnake/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lazysnake"]
@@ -37,3 +60,24 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+show_error_codes = true
+
+# Tests stay relaxed only when they're a package: without tests/__init__.py
+# mypy computes bare module names (test_*) that "tests.*" can never match,
+# so this section is inert until then and the gate is scoped by files = ["src"].
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_any_generics = false
+warn_return_any = false
+warn_unused_ignores = false
