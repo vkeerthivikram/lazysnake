@@ -23,6 +23,7 @@ class FakeProcess:
         self.killed = False
         self.wait_calls = 0
         self.returncode = 0
+        self.pid = 4242
         self.stdout = None
         self.stderr = None
         self._gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -268,6 +269,33 @@ async def test_git_process_launch_uses_platform_safe_group_options(
 
     assert len(spawn_calls) == 1
     assert spawn_calls[0].get("start_new_session", False) is (os.name == "posix")
+
+
+async def test_kill_process_group_windows_taskkills_whole_tree(monkeypatch) -> None:
+    """Without POSIX process groups, cleanup must terminate the whole
+    descendant tree via ``taskkill /T /F`` — not only the direct child."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(runner_module.os, "name", "nt")
+    monkeypatch.setattr(
+        runner_module.subprocess, "run", lambda args, **kw: calls.append(list(args))
+    )
+    proc = FakeProcess()
+    runner_module._kill_process_group(proc)
+    assert calls == [["taskkill", "/T", "/F", "/PID", str(proc.pid)]]
+    assert proc.killed  # belt-and-braces direct kill follows the tree kill
+
+
+async def test_kill_process_group_windows_survives_taskkill_failure(monkeypatch) -> None:
+    """A missing/broken taskkill must not skip the direct-kill fallback."""
+
+    def broken(args: object, **kw: object) -> None:
+        raise OSError("taskkill unavailable")
+
+    monkeypatch.setattr(runner_module.os, "name", "nt")
+    monkeypatch.setattr(runner_module.subprocess, "run", broken)
+    proc = FakeProcess()
+    runner_module._kill_process_group(proc)  # must not raise
+    assert proc.killed
 
 
 @pytest.mark.skipif(

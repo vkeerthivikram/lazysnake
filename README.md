@@ -226,11 +226,13 @@ alone.
 
 ## Platform notes
 
-On POSIX systems, timed-out or cancelled Git and custom-shell commands are
-terminated as process groups. Windows keeps its normal subprocess launch
-behavior; without POSIX process groups, cleanup can terminate only the
-direct child and a spawned grandchild may outlive it. Process-tree integration
-tests run on Linux and were not verified on Windows.
+Timed-out or cancelled Git and custom-shell commands are terminated together
+with every process they spawned: as a process group on POSIX, and via
+`taskkill /T /F` (whole descendant tree) on Windows. If lazysnake itself is
+killed, Windows does not automatically clean up its children — only explicit
+in-app timeouts and cancellations sweep the tree there. Process-tree
+integration tests run on Linux; the Windows leg of CI covers the rest of the
+suite.
 
 ## Testing
 

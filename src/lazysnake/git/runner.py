@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, overload
@@ -32,14 +33,35 @@ def _spawn_options() -> Any:
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
-    """Kill a POSIX session by its known leader PID, or its direct child elsewhere."""
+    """Kill ``proc`` and every descendant it spawned.
+
+    POSIX: the child runs in its own session (``start_new_session``), so
+    signalling the group leader's PID kills the whole group — including
+    grandchildren spawned before the shell/git leader exited.
+
+    Windows: there are no POSIX process groups, so ``taskkill /T /F``
+    terminates the entire descendant tree by PID. A Job Object with
+    ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` would also cover a lazysnake
+    crash; taskkill covers the explicit timeout/cancellation paths
+    without ctypes or asyncio handle plumbing.
+    """
     pid = getattr(proc, "pid", None)
-    if os.name == "posix" and pid is not None:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-            return
-        except OSError:
-            pass
+    if pid is not None:
+        if os.name == "posix":
+            try:
+                os.killpg(pid, signal.SIGKILL)
+                return
+            except OSError:
+                pass
+        elif os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
     try:
         proc.kill()
     except ProcessLookupError:
