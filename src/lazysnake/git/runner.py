@@ -183,6 +183,18 @@ class GitError(RuntimeError):
         return f"{self.command}: {detail or f'exit code {self.returncode}'}"
 
 
+def _is_lock_refusal(stderr: str) -> bool:
+    """Detect git's atomic refusal to create index.lock.
+
+    On Windows the previous git's lock deletion can linger (antivirus
+    holds the handle), so the NEXT sequential git sees a stale entry and
+    refuses before doing any work. Refusal is atomic and upfront, so a
+    bounded retry is safe; a lock genuinely held by another process also
+    refuses, and the retry simply outlives a few of those too.
+    """
+    return "index.lock" in stderr and "File exists" in stderr
+
+
 def _base_env() -> dict[str, str]:
     """Environment that keeps git non-interactive and unpaged."""
     env = dict(os.environ)
@@ -193,6 +205,11 @@ def _base_env() -> dict[str, str]:
             "GIT_EDITOR": "true",
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_CONFIG_NOSYSTEM": "1",
+            # Read-only commands (status, diff, log) must never refresh the
+            # index stat cache under index.lock — the poll timer runs them
+            # constantly and lock churn collides with real mutations
+            # (worst on Windows, where lock-file deletion can linger).
+            "GIT_OPTIONAL_LOCKS": "0",
             "TERM": env.get("TERM") or "dumb",
         }
     )
@@ -309,9 +326,38 @@ class Git:
         Raises :class:`GitError` when the command fails, unless
         ``check=False`` (then raw stdout is returned whatever the exit
         code was).
+
+        Stale index.lock refusals (see :func:`_is_lock_refusal`) are
+        retried a bounded number of times before surfacing.
         """
         if max_output_bytes is not None and max_output_bytes < 0:
             raise ValueError("max_output_bytes must not be negative")
+        for attempt in range(3):
+            try:
+                return await self._run_once(
+                    *args,
+                    check=check,
+                    env_extra=env_extra,
+                    timeout=timeout,
+                    input=input,
+                    max_output_bytes=max_output_bytes,
+                )
+            except GitError as err:
+                if attempt < 2 and _is_lock_refusal(err.stderr):
+                    await asyncio.sleep(0.25 * (attempt + 1))
+                    continue
+                raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _run_once(
+        self,
+        *args: str,
+        check: bool = True,
+        env_extra: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        input: str | None = None,
+        max_output_bytes: int | None = None,
+    ) -> str | tuple[str, bool]:
         proc = await asyncio.create_subprocess_exec(
             "git",
             *args,
@@ -375,9 +421,34 @@ class Git:
         without storing it. ``max_line_bytes`` bounds each emitted line while
         still draining its remainder. Returns ``(returncode, combined_output)``.
         Non-zero exits are reported in the return code, not raised.
+        Stale index.lock refusals are retried a bounded number of times.
         """
         if max_line_bytes is not None and max_line_bytes < 1:
             raise ValueError("max_line_bytes must be positive")
+        for attempt in range(3):
+            code, combined = await self._run_streaming_once(
+                *args,
+                on_line=on_line,
+                env_extra=env_extra,
+                timeout=timeout,
+                capture_output=capture_output,
+                max_line_bytes=max_line_bytes,
+            )
+            if attempt < 2 and code != 0 and _is_lock_refusal(combined):
+                await asyncio.sleep(0.25 * (attempt + 1))
+                continue
+            return code, combined
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _run_streaming_once(
+        self,
+        *args: str,
+        on_line: Callable[[str, bool], None] | None = None,
+        env_extra: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        capture_output: bool = True,
+        max_line_bytes: int | None = None,
+    ) -> tuple[int, str]:
         proc = await asyncio.create_subprocess_exec(
             "git",
             *args,

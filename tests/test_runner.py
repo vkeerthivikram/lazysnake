@@ -52,6 +52,58 @@ def _fake_spawn(proc: FakeProcess, calls: list[dict[str, object]] | None = None)
     return mock.patch(_SPAWN, spawn)
 
 
+class _ImmediateProc:
+    """Subprocess stand-in that exits instantly with canned output."""
+
+    def __init__(self, returncode: int, stdout: bytes, stderr: bytes) -> None:
+        self.returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
+        self.pid = 4242
+
+    def kill(self) -> None:  # pragma: no cover - never reached in these tests
+        pass
+
+    async def communicate(self, stdin: bytes | None = None) -> tuple[bytes, bytes]:
+        return self._stdout, self._stderr
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
+_LOCK_ERR = (
+    b"fatal: Unable to create '.git/index.lock': File exists.\n"
+    b"\nAnother git process seems to be running in this repository"
+)
+
+
+async def test_run_retries_stale_index_lock_then_succeeds(repo) -> None:
+    """Windows deferred lock deletion: first git refuses atomically, the
+    retry a moment later succeeds."""
+    git = Git(repo.root)
+    procs = [_ImmediateProc(128, b"", _LOCK_ERR), _ImmediateProc(0, b"ok\n", b"")]
+    calls: list[dict[str, object]] = []
+
+    async def spawn(*args: object, **kwargs: object) -> _ImmediateProc:
+        calls.append(kwargs)
+        return procs.pop(0)
+
+    with mock.patch(_SPAWN, spawn):
+        out = await git.run("submodule", "deinit", "-f", "vendor/lib")
+    assert out.strip() == "ok"
+    assert len(calls) == 2
+
+
+async def test_run_lock_refusal_exhausts_retries_and_raises(repo) -> None:
+    git = Git(repo.root)
+
+    async def spawn(*args: object, **kwargs: object) -> _ImmediateProc:
+        return _ImmediateProc(128, b"", _LOCK_ERR)
+
+    with mock.patch(_SPAWN, spawn), pytest.raises(GitError, match=r"index\.lock"):
+        await git.run("write-tree")
+
+
 async def test_run_returns_stdout_and_check_false_returns_stdout(repo) -> None:
     git = Git(repo.root)
     assert (await git.run("rev-parse", "--is-inside-work-tree")).strip() == "true"
