@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -30,7 +32,9 @@ class RepoHelper:
     def write(self, rel_path: str, content: str) -> Path:
         target = self.root / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        # Byte-exact LF: Windows text mode would translate \n to \r\n,
+        # storing CRLF blobs that rebuilt LF patches cannot apply against.
+        target.write_text(content, newline="\n")
         return target
 
     def commit_all(self, message: str) -> None:
@@ -80,3 +84,29 @@ def remote_repo(tmp_path: Path) -> RepoHelper:
     helper.commit_all("initial commit")
     helper.git("remote", "add", "origin", str(origin))
     return helper
+
+
+@pytest.fixture
+def eventually():
+    """Bounded wait for a condition that lands via async workers.
+
+    CI runners are far slower than a dev machine: after a keypress, the
+    action worker, its checkpoint subprocesses and the panel refresh can
+    all still be in flight when a single ``pilot.pause()`` returns. Tests
+    assert through this helper instead of sleeping a fixed amount, so
+    fast machines finish immediately and slow ones get a real timeout
+    with the last observed state in the failure.
+    """
+
+    async def _eventually(condition, timeout: float = 15.0, interval: float = 0.05):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if condition():
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(interval)
+        assert condition(), f"condition not reached within {timeout}s"
+
+    return _eventually

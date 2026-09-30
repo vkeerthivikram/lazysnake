@@ -107,6 +107,9 @@ async def test_remote_stream_giterror_returns_failure_logs_and_refreshes(
 
         monkeypatch.setattr(app, "refresh_state", count_refresh)
         monkeypatch.setattr(app.git, "run_streaming", failed_stream)
+        # The 2s poll timer also calls refresh_state; neutralize it so the
+        # count below stays exact on any runner speed.
+        monkeypatch.setattr(app, "_poll_status", lambda: None)
 
         for action, expected in (
             (app.fetch, "git fetch --all --progress"),

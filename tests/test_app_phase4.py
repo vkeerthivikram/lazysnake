@@ -20,17 +20,22 @@ async def _two_hunks(repo) -> None:
     )
 
 
-async def test_stage_hunk_through_diff_view(repo) -> None:
+async def test_stage_hunk_through_diff_view(repo, eventually) -> None:
     await _two_hunks(repo)
     app = LazysnakeApp(Git(repo.root))
     async with app.run_test() as pilot:
         await app.refresh_state().wait()
         await pilot.pause()
 
-        # Focus the interactive diff (key "5") and land on the first hunk.
+        # Focus the interactive diff (key "5") and land on the first hunk;
+        # on slow CI the diff render lands slightly after the refresh.
         app.action_focus_diff()
-        assert app.diff_view.current_fd is not None
-        assert len(app.diff_view.current_fd.hunks) == 2
+
+        def hunks_ready() -> int:
+            fd = app.diff_view.current_fd
+            return len(fd.hunks) if fd is not None else 0
+
+        await eventually(lambda: hunks_ready() == 2)
 
         app.diff_view.index = 1  # first content row of hunk 0
         await pilot.pause()
@@ -48,13 +53,14 @@ async def test_stage_hunk_through_diff_view(repo) -> None:
         assert "line 14 changed" in worktree
 
 
-async def test_stage_single_line_through_diff_view(repo) -> None:
+async def test_stage_single_line_through_diff_view(repo, eventually) -> None:
     await _two_hunks(repo)
     app = LazysnakeApp(Git(repo.root))
     async with app.run_test() as pilot:
         await app.refresh_state().wait()
         await pilot.pause()
         app.action_focus_diff()
+        await eventually(lambda: app.diff_view.current_fd is not None)
 
         # Move to the "+line 2 changed" row.
         for i, child in enumerate(app.diff_view.children):
@@ -86,7 +92,7 @@ async def test_amend_flow(repo) -> None:
         assert (await app.git.run("rev-list", "--count", "HEAD")).strip() == "1"
 
 
-async def test_cherry_pick_flow(repo) -> None:
+async def test_cherry_pick_flow(repo, eventually) -> None:
     repo.git("switch", "-c", "source")
     repo.write("gift.txt", "from source branch\n")
     repo.commit_all("gift commit")
@@ -108,7 +114,8 @@ async def test_cherry_pick_flow(repo) -> None:
             refs="",
         )
         await app.cherry_pick(gift).wait()
-        await pilot.pause()
+        # The worker's panel refresh can land a beat later on slow CI.
+        await eventually(lambda: bool(app.commits) and app.commits[0].subject == "gift commit")
         subjects = [c.subject for c in app.commits]
         assert subjects[0] == "gift commit"
 

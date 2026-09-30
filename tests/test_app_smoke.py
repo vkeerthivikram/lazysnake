@@ -36,7 +36,7 @@ async def test_app_boots_and_lists_files(repo) -> None:
         assert len(list(app.diff_view.children)) > 0
 
 
-async def test_space_stages_selected_file(repo) -> None:
+async def test_space_stages_selected_file(repo, eventually) -> None:
     repo.write("README.md", "changed\n")
 
     app = LazysnakeApp(Git(repo.root))
@@ -46,7 +46,11 @@ async def test_space_stages_selected_file(repo) -> None:
 
         assert app.files_panel.selected_item is not None
         await pilot.press("space")
-        await pilot.pause()
+
+        def staged_display() -> str | None:
+            return next((f.display for f in app.snapshot.files if f.path == "README.md"), None)
+
+        await eventually(lambda: staged_display() == "M ")
 
         snap = parse_status(await app.git.run("status", "--porcelain=v2", "--branch", "-z"))
         by_path = {f.path: f for f in snap.files}

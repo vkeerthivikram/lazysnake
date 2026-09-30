@@ -132,7 +132,7 @@ def test_every_bound_action_resolves_to_a_method() -> None:
             )
 
 
-async def test_stash_message_key_opens_input_and_stashes(repo) -> None:
+async def test_stash_message_key_opens_input_and_stashes(repo, eventually) -> None:
     from lazysnake.git.runner import Git
     from lazysnake.ui.app import LazysnakeApp
     from lazysnake.ui.modals import InputScreen
@@ -151,7 +151,7 @@ async def test_stash_message_key_opens_input_and_stashes(repo) -> None:
         for ch in "checkpoint before refactor":
             await pilot.press(ch)
         await pilot.press("enter")
-        await pilot.pause()
+        await eventually(lambda: len(app.stash) == 1)
         listing = await app.git.run("stash", "list")
         assert "checkpoint before refactor" in listing
         assert len(app.stash) == 1
