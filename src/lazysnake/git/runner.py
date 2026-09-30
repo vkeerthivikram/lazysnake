@@ -10,13 +10,130 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any, overload
 
 DEFAULT_TIMEOUT = 60.0
 
+_READ_CHUNK = 64 * 1024
+_CLEANUP_TIMEOUT = 1.0
+_CLEANUP_CANCEL_WAIT = 0.1
+_STDERR_CAPTURE_LIMIT = 64 * 1024
+
 _ENCODING = "utf-8"
 _ERRORS = "surrogateescape"
+
+
+def _spawn_options() -> Any:
+    """Isolate POSIX commands in a killable session; Windows keeps its default."""
+    return {"start_new_session": True} if os.name == "posix" else {}
+
+
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill a POSIX session by its known leader PID, or its direct child elsewhere."""
+    pid = getattr(proc, "pid", None)
+    if os.name == "posix" and pid is not None:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _close_process_pipes(proc: asyncio.subprocess.Process) -> None:
+    transport = getattr(proc, "_transport", None)
+    close = getattr(transport, "close", None)
+    if close is not None:
+        try:
+            close()
+        except OSError:
+            pass
+
+
+async def _drain_and_reap(proc: asyncio.subprocess.Process) -> None:
+    async def drain(stream: asyncio.StreamReader | None) -> None:
+        if stream is not None:
+            while await stream.read(_READ_CHUNK):
+                pass
+
+    await asyncio.gather(drain(proc.stdout), drain(proc.stderr), proc.wait())
+
+
+async def _read_capped(stream: asyncio.StreamReader | None, limit: int) -> tuple[bytes, bool]:
+    if stream is None:
+        return b"", False
+    retained = bytearray()
+    truncated = False
+    while chunk := await stream.read(_READ_CHUNK):
+        room = max(0, limit - len(retained))
+        retained.extend(chunk[:room])
+        truncated = truncated or len(chunk) > room
+    return bytes(retained), truncated
+
+
+async def _feed_stdin(stream: asyncio.StreamWriter | None, data: bytes | None) -> None:
+    if stream is None or data is None:
+        return
+    try:
+        stream.write(data)
+        await stream.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        stream.close()
+    try:
+        await stream.wait_closed()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
+async def _communicate_capped(
+    proc: asyncio.subprocess.Process, data: bytes | None, stdout_limit: int
+) -> tuple[bytes, bool, bytes, bool]:
+    stdout_result, stderr_result, _, _ = await asyncio.gather(
+        _read_capped(proc.stdout, stdout_limit),
+        _read_capped(proc.stderr, _STDERR_CAPTURE_LIMIT),
+        proc.wait(),
+        _feed_stdin(proc.stdin, data),
+    )
+    stdout, stdout_truncated = stdout_result
+    stderr, stderr_truncated = stderr_result
+    return stdout, stdout_truncated, stderr, stderr_truncated
+
+
+async def terminate_process(proc: asyncio.subprocess.Process) -> None:
+    """Kill and reap a subprocess without allowing inherited pipes to hang cleanup."""
+    _kill_process_group(proc)
+    if os.name != "posix":
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=_CLEANUP_TIMEOUT)
+        except TimeoutError:
+            pass
+        finally:
+            _close_process_pipes(proc)
+        return
+
+    task = asyncio.create_task(_drain_and_reap(proc))
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=_CLEANUP_TIMEOUT)
+    except TimeoutError:
+        _close_process_pipes(proc)
+        task.cancel()
+        await asyncio.wait({task}, timeout=_CLEANUP_CANCEL_WAIT)
+    except asyncio.CancelledError:
+        _close_process_pipes(proc)
+        task.cancel()
+        await asyncio.wait({task}, timeout=_CLEANUP_CANCEL_WAIT)
+        raise
+
+
+_stop_and_reap = terminate_process
 
 
 class GitError(RuntimeError):
@@ -66,9 +183,37 @@ class Git:
     def __init__(self, repo_root: Path | str, *, timeout: float = DEFAULT_TIMEOUT) -> None:
         self.repo_root = Path(repo_root)
         self.timeout = timeout
+        self._git_dir: Path | None = None
+
+    async def git_dir(self) -> Path:
+        """Absolute path of this repository's git directory.
+
+        In a linked worktree ``.git`` is a *file* pointing at the common
+        git dir, so ``repo_root/.git/<name>`` lookups silently misreport
+        sequencer state there; ``git rev-parse`` resolves both layouts.
+        The result is cached on the instance, so refresh-time callers pay
+        one extra rev-parse per ``Git`` lifetime, not per refresh. The
+        cache cannot go stale: a ``Git`` is bound to one repo root, and
+        switching repositories relaunches the process (``switch_repo``).
+        """
+        if self._git_dir is None:
+            try:
+                out = await self.run("rev-parse", "--absolute-git-dir")
+            except GitError:
+                # Repo too broken to ask git: assume the plain layout and
+                # do not cache, so a later call can retry.
+                return self.repo_root / ".git"
+            self._git_dir = Path(out.strip())
+        return self._git_dir
+
+    async def state_file(self, name: str) -> Path:
+        """On-disk path of a git state file (MERGE_HEAD, BISECT_LOG, ...)."""
+        return (await self.git_dir()) / name
 
     @classmethod
-    async def discover(cls, start_dir: Path | str = ".") -> Git:
+    async def discover(
+        cls, start_dir: Path | str = ".", *, timeout: float = DEFAULT_TIMEOUT
+    ) -> Git:
         """Locate the repository root from ``start_dir`` and return a runner."""
         proc = await asyncio.create_subprocess_exec(
             "git",
@@ -77,9 +222,23 @@ class Git:
             cwd=str(start_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **_spawn_options(),
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            await terminate_process(proc)
+            raise GitError(
+                ["rev-parse", "--show-toplevel"],
+                -1,
+                "",
+                f"timed out after {timeout}s",
+            ) from None
+        except asyncio.CancelledError:
+            await terminate_process(proc)
+            raise
         if proc.returncode != 0:
+            assert proc.returncode is not None  # communicate() reaped the child
             raise GitError(
                 ["rev-parse", "--show-toplevel"],
                 proc.returncode,
@@ -89,6 +248,7 @@ class Git:
         root = stdout.decode(_ENCODING, _ERRORS).strip()
         return cls(Path(root))
 
+    @overload
     async def run(
         self,
         *args: str,
@@ -96,14 +256,40 @@ class Git:
         env_extra: Mapping[str, str] | None = None,
         timeout: float | None = None,
         input: str | None = None,
-    ) -> str:
+    ) -> str: ...
+
+    @overload
+    async def run(
+        self,
+        *args: str,
+        check: bool = True,
+        env_extra: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        input: str | None = None,
+        max_output_bytes: int,
+    ) -> tuple[str, bool]: ...
+
+    async def run(
+        self,
+        *args: str,
+        check: bool = True,
+        env_extra: Mapping[str, str] | None = None,
+        timeout: float | None = None,
+        input: str | None = None,
+        max_output_bytes: int | None = None,
+    ) -> str | tuple[str, bool]:
         """Run ``git <args>`` and return decoded stdout.
 
         ``input`` (if given) is piped to the command's stdin — used for
         feeding hand-built patches to ``git apply``.
+        With ``max_output_bytes``, return ``(stdout, truncated)`` while
+        draining the remaining output without retaining it.
         Raises :class:`GitError` when the command fails, unless
-        ``check=False`` (then the error text is returned instead).
+        ``check=False`` (then raw stdout is returned whatever the exit
+        code was).
         """
+        if max_output_bytes is not None and max_output_bytes < 0:
+            raise ValueError("max_output_bytes must not be negative")
         proc = await asyncio.create_subprocess_exec(
             "git",
             *args,
@@ -112,22 +298,37 @@ class Git:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._env(env_extra),
+            **_spawn_options(),
         )
         stdin_bytes = input.encode(_ENCODING, _ERRORS) if input is not None else None
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(stdin_bytes), timeout=timeout or self.timeout
-            )
+            if max_output_bytes is None:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(stdin_bytes), timeout=timeout or self.timeout
+                )
+                stdout_truncated = False
+            else:
+                stdout_b, stdout_truncated, stderr_b, stderr_truncated = await asyncio.wait_for(
+                    _communicate_capped(proc, stdin_bytes, max_output_bytes),
+                    timeout=timeout or self.timeout,
+                )
+                if stderr_truncated:
+                    stderr_b += b"\n...[stderr truncated]"
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await terminate_process(proc)
             raise GitError(
                 list(args), -1, "", f"timed out after {timeout or self.timeout}s"
             ) from None
+        except asyncio.CancelledError:
+            await terminate_process(proc)
+            raise
         stdout = stdout_b.decode(_ENCODING, _ERRORS)
         stderr = stderr_b.decode(_ENCODING, _ERRORS)
         if proc.returncode != 0 and check:
+            assert proc.returncode is not None  # communicate() reaped the child
             raise GitError(list(args), proc.returncode, stdout, stderr)
+        if max_output_bytes is not None:
+            return stdout, stdout_truncated
         return stdout
 
     def _env(self, env_extra: Mapping[str, str] | None) -> dict[str, str]:
@@ -142,14 +343,19 @@ class Git:
         on_line: Callable[[str, bool], None] | None = None,
         env_extra: Mapping[str, str] | None = None,
         timeout: float | None = None,
+        capture_output: bool = True,
+        max_line_bytes: int | None = None,
     ) -> tuple[int, str]:
         """Run ``git <args>`` and stream stdout/stderr as they arrive.
 
-        ``on_line(text, is_stderr)`` fires per line while the command runs —
-        the UI appends remote progress to the command log live. Returns
-        ``(returncode, combined_output)``. Non-zero exits are reported in
-        the return code, not raised, so callers decide how to surface them.
+        ``on_line(text, is_stderr)`` fires per line while the command runs.
+        Output is retained by default; set ``capture_output=False`` to drain
+        without storing it. ``max_line_bytes`` bounds each emitted line while
+        still draining its remainder. Returns ``(returncode, combined_output)``.
+        Non-zero exits are reported in the return code, not raised.
         """
+        if max_line_bytes is not None and max_line_bytes < 1:
+            raise ValueError("max_line_bytes must be positive")
         proc = await asyncio.create_subprocess_exec(
             "git",
             *args,
@@ -157,32 +363,59 @@ class Git:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self._env(env_extra),
+            **_spawn_options(),
         )
         combined: list[str] = []
+
+        def _emit(raw: bytes, is_err: bool, truncated: bool = False) -> None:
+            text = raw.decode(_ENCODING, _ERRORS)
+            if truncated:
+                text += " ... [line truncated]"
+            if capture_output:
+                combined.append(text)
+            if on_line is not None:
+                on_line(text, is_err)
 
         async def pump(stream: asyncio.StreamReader | None, is_err: bool) -> None:
             if stream is None:
                 return
+            buf = bytearray()
+            truncated = False
             while True:
-                raw = await stream.readline()
-                if not raw:
-                    return
-                text = raw.decode(_ENCODING, _ERRORS).rstrip("\n")
-                combined.append(text)
-                if on_line is not None:
-                    on_line(text, is_err)
+                chunk = await stream.read(_READ_CHUNK)
+                if not chunk:
+                    break
+                offset = 0
+                while offset < len(chunk):
+                    newline = chunk.find(b"\n", offset)
+                    end = len(chunk) if newline < 0 else newline
+                    segment = chunk[offset:end]
+                    if max_line_bytes is None:
+                        buf.extend(segment)
+                    else:
+                        room = max(0, max_line_bytes - len(buf))
+                        buf.extend(segment[:room])
+                        truncated = truncated or len(segment) > room
+                    if newline < 0:
+                        break
+                    _emit(bytes(buf), is_err, truncated)
+                    buf.clear()
+                    truncated = False
+                    offset = newline + 1
+            if buf or truncated:
+                _emit(bytes(buf), is_err, truncated)
 
         try:
             await asyncio.wait_for(
-                asyncio.gather(
-                    pump(proc.stdout, False), pump(proc.stderr, True), proc.wait()
-                ),
+                asyncio.gather(pump(proc.stdout, False), pump(proc.stderr, True), proc.wait()),
                 timeout=timeout or self.timeout,
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await terminate_process(proc)
             raise GitError(
                 list(args), -1, "", f"timed out after {timeout or self.timeout}s"
             ) from None
+        except asyncio.CancelledError:
+            await terminate_process(proc)
+            raise
         return proc.returncode or 0, "\n".join(combined)

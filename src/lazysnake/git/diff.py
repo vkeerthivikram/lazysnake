@@ -7,6 +7,7 @@ files) that selected hunks can be rebuilt into a patch ``git apply`` accepts.
 from __future__ import annotations
 
 import enum
+import io
 import re
 from dataclasses import dataclass, field
 
@@ -61,6 +62,9 @@ class FileDiff:
     is_deleted: bool = False
     rename_from: str | None = None
     rename_to: str | None = None
+    truncated: bool = False
+    total_additions: int | None = field(default=None, repr=False)
+    total_deletions: int | None = field(default=None, repr=False)
 
     @property
     def path(self) -> str:
@@ -71,10 +75,14 @@ class FileDiff:
 
     @property
     def additions(self) -> int:
+        if self.total_additions is not None:
+            return self.total_additions
         return sum(h.additions for h in self.hunks)
 
     @property
     def deletions(self) -> int:
+        if self.total_deletions is not None:
+            return self.total_deletions
         return sum(h.deletions for h in self.hunks)
 
     def to_patch(self, hunks: list[Hunk] | None = None) -> str:
@@ -90,23 +98,50 @@ _HUNK_RE = re.compile(
 _DIFF_GIT_RE = re.compile(r"^diff --git a/(?P<a>.+) b/(?P<b>.+)$")
 
 
-def parse_diff(text: str) -> list[FileDiff]:
-    """Parse a unified diff into per-file structures."""
+def parse_diff(
+    text: str,
+    *,
+    max_rows: int | None = None,
+    max_files: int | None = None,
+    truncated: bool = False,
+) -> list[FileDiff]:
+    """Parse a unified diff, optionally retaining only complete bounded hunks/files."""
     files: list[FileDiff] = []
     cur: FileDiff | None = None
     hunk: Hunk | None = None
     old_no = new_no = 0
+    retained_rows = 0
+    hunk_kept = False
+    hunk_rows = 0
+    file_additions = file_deletions = 0
 
-    for line in text.splitlines():
+    for raw_line in io.StringIO(text):
+        line = raw_line.rstrip("\r\n")
         if line.startswith("diff --git "):
+            if cur is not None:
+                if hunk is not None and hunk_kept:
+                    cur.hunks.append(hunk)
+                    retained_rows += hunk_rows
+                cur.total_additions = file_additions
+                cur.total_deletions = file_deletions
+            if max_files is not None and len(files) >= max_files:
+                if files:
+                    files[-1].truncated = True
+                break
             cur = _new_file_record(line)
             files.append(cur)
             hunk = None
+            hunk_kept = False
+            hunk_rows = 0
+            file_additions = file_deletions = 0
             continue
         if cur is None:
             continue
 
         if line.startswith("@@ ") and (m := _HUNK_RE.match(line)):
+            if hunk is not None and hunk_kept:
+                cur.hunks.append(hunk)
+                retained_rows += hunk_rows
             hunk = Hunk(
                 old_start=int(m.group("os")),
                 old_count=int(m.group("oc") or "1"),
@@ -115,7 +150,10 @@ def parse_diff(text: str) -> list[FileDiff]:
                 raw_header=line,
                 section=m.group("section") or "",
             )
-            cur.hunks.append(hunk)
+            hunk_kept = max_rows is None or retained_rows < max_rows
+            hunk_rows = 1
+            if not hunk_kept:
+                cur.truncated = True
             # For zero-count sides git reports the line *before* the range; the
             # first line of that kind then takes the following number.
             old_no = hunk.old_start + (1 if hunk.old_count == 0 else 0)
@@ -127,22 +165,37 @@ def parse_diff(text: str) -> list[FileDiff]:
             continue
 
         if line.startswith("+"):
-            hunk.lines.append(PatchLine(LineKind.ADDITION, line[1:], new_no=new_no))
+            file_additions += 1
+            patch_line = PatchLine(LineKind.ADDITION, line[1:], new_no=new_no)
             new_no += 1
         elif line.startswith("-"):
-            hunk.lines.append(PatchLine(LineKind.DELETION, line[1:], old_no=old_no))
+            file_deletions += 1
+            patch_line = PatchLine(LineKind.DELETION, line[1:], old_no=old_no)
             old_no += 1
         elif line.startswith("\\"):
-            hunk.lines.append(PatchLine(LineKind.META, line))
+            patch_line = PatchLine(LineKind.META, line)
         else:
             # Context lines are " " + content; tolerate a bare empty line.
             content = line[1:] if line.startswith(" ") else line
-            hunk.lines.append(
-                PatchLine(LineKind.CONTEXT, content, old_no=old_no, new_no=new_no)
-            )
+            patch_line = PatchLine(LineKind.CONTEXT, content, old_no=old_no, new_no=new_no)
             old_no += 1
             new_no += 1
+        if hunk_kept and hunk is not None:
+            if max_rows is None or retained_rows + hunk_rows + 1 <= max_rows:
+                hunk.lines.append(patch_line)
+                hunk_rows += 1
+            else:
+                hunk.lines.clear()
+                hunk_kept = False
+                cur.truncated = True
 
+    if cur is not None:
+        if hunk is not None and hunk_kept and not truncated:
+            cur.hunks.append(hunk)
+        if truncated:
+            cur.truncated = True
+        cur.total_additions = file_additions
+        cur.total_deletions = file_deletions
     return files
 
 

@@ -63,13 +63,7 @@ async def test_worktree_parse_and_flow(repo) -> None:
 
 def test_union_resolve_fixture() -> None:
     content = (
-        "common top\n"
-        "<<<<<<< HEAD\n"
-        "our line\n"
-        "=======\n"
-        "their line\n"
-        ">>>>>>> branch\n"
-        "common bottom\n"
+        "common top\n<<<<<<< HEAD\nour line\n=======\ntheir line\n>>>>>>> branch\ncommon bottom\n"
     )
     merged, count = union_resolve(content)
     assert count == 1

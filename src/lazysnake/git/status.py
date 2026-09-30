@@ -16,21 +16,22 @@ Record shapes (NUL-terminated when ``-z`` is used)::
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from lazysnake.git.models import FileEntry, RepoSnapshot
+from lazysnake.git.runner import Git
 
 _AB_RE = re.compile(r"^# branch\.ab \+(\d+) -(\d+)$")
 
 
-def merge_in_progress(repo_root: Path | str) -> bool:
+async def merge_in_progress(git: Git) -> bool:
     """A merge is underway when ``MERGE_HEAD`` exists in the git dir.
 
     Porcelain v2 does not report merge state, so callers check this
-    alongside ``parse_status``. (Linked worktrees store ``.git`` as a
-    file — not handled yet.)
+    alongside ``parse_status``. The path comes from the runner's git-dir
+    resolution, so linked worktrees (where ``.git`` is a file pointing
+    at the common git dir) report correctly too.
     """
-    return (Path(repo_root) / ".git" / "MERGE_HEAD").exists()
+    return (await git.state_file("MERGE_HEAD")).exists()
 
 
 def parse_status(data: str) -> RepoSnapshot:

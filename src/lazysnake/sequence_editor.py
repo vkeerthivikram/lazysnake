@@ -20,9 +20,7 @@ def main(argv: list[str]) -> int:
         return 2
     plan = json.loads(Path(argv[1]).read_text())
     todo = Path(argv[2])
-    todo.write_text(
-        rewrite_todo(todo.read_text(), plan.get("ops", {}), order=plan.get("order"))
-    )
+    todo.write_text(rewrite_todo(todo.read_text(), plan.get("ops", {}), order=plan.get("order")))
     return 0
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from lazysnake.git.runner import Git
 
 OURS = "<<<<<<<"
 BASE = "|||||||"  # diff3 style only; absent in default merge style
@@ -40,6 +40,10 @@ def union_resolve(content: str) -> tuple[str, int]:
     return "".join(out), conflicts
 
 
-def bisect_in_progress(repo_root: Path | str) -> bool:
-    """A bisect is underway when .git/BISECT_LOG exists."""
-    return (Path(repo_root) / ".git" / "BISECT_LOG").exists()
+async def bisect_in_progress(git: Git) -> bool:
+    """A bisect is underway when BISECT_LOG exists in the git dir.
+
+    Uses the runner's git-dir resolution so linked worktrees (where
+    ``.git`` is a file) report correctly.
+    """
+    return (await git.state_file("BISECT_LOG")).exists()

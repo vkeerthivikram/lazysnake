@@ -6,8 +6,7 @@ from dataclasses import dataclass
 
 SEP = "\x1f"
 FORMAT = (
-    f"%(refname:short){SEP}%(objectname){SEP}%(HEAD){SEP}"
-    f"%(upstream:short){SEP}%(upstream:track)"
+    f"%(refname:short){SEP}%(objectname){SEP}%(HEAD){SEP}%(upstream:short){SEP}%(upstream:track)"
 )
 
 

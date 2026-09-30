@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lazysnake.git.runner import Git
+from lazysnake.git.runner import Git, GitError
 
 
 @dataclass
@@ -28,7 +28,9 @@ async def submodules(git: Git) -> list[Submodule]:
     """All submodules with state; empty when there are none."""
     try:
         data = await git.run("submodule", "status")
-    except Exception:
+    except GitError:
+        # Not a submodule-capable state (e.g. unborn HEAD); report none.
+        # Anything else (CancelledError, bugs) must propagate.
         return []
     out: list[Submodule] = []
     for line in data.splitlines():

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lazysnake.git.runner import Git
+from lazysnake.git.runner import Git, GitError
 from lazysnake.ui.app import LazysnakeApp
 
 
@@ -84,3 +84,40 @@ async def test_fetch_streams(remote_repo) -> None:
         await pilot.pause()
         assert code == 0
         assert "▸ git fetch --all --progress" in _log_text(app)
+
+
+async def test_remote_stream_giterror_returns_failure_logs_and_refreshes(
+    remote_repo, monkeypatch
+) -> None:
+    remote_repo.git("push", "-u", "origin", "main")
+    app = LazysnakeApp(Git(remote_repo.root))
+    async with app.run_test() as pilot:
+        await app.refresh_state().wait()
+        await pilot.pause()
+        original_refresh = app.refresh_state
+        refreshes = 0
+
+        def count_refresh(*args, **kwargs):
+            nonlocal refreshes
+            refreshes += 1
+            return original_refresh(*args, **kwargs)
+
+        async def failed_stream(*args, **kwargs):
+            raise GitError(list(args), -1, "", "transport timed out")
+
+        monkeypatch.setattr(app, "refresh_state", count_refresh)
+        monkeypatch.setattr(app.git, "run_streaming", failed_stream)
+
+        for action, expected in (
+            (app.fetch, "git fetch --all --progress"),
+            (app.pull, "git pull"),
+            (app.push, "git push --progress"),
+        ):
+            code = await action().wait()
+            await pilot.pause()
+            assert code != 0
+            log = _log_text(app)
+            assert f"✗ {expected}" in log
+            assert "transport timed out" in log
+
+        assert refreshes == 3

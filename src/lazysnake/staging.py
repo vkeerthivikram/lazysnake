@@ -56,11 +56,7 @@ def _expand_context(lines: list[PatchLine], selected: set[int], context: int) ->
 
 
 def _range_for(kept: list[PatchLine], *, old: bool, fallback: int) -> tuple[int, int]:
-    numbers = [
-        (pl.old_no if old else pl.new_no)
-        for pl in kept
-        if (pl.old_no if old else pl.new_no) is not None
-    ]
+    numbers = [number for pl in kept if (number := pl.old_no if old else pl.new_no) is not None]
     count = len(numbers)
     if count == 0:
         # Convention: a zero-count range points at the line *before*.

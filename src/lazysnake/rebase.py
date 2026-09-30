@@ -19,6 +19,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from lazysnake.git.runner import Git
 
@@ -113,7 +114,7 @@ async def rebase_with_ops(
     base_args = [base] if isinstance(base, str) else list(base)
 
     plan_path = _tempfile(suffix=".json")
-    plan: dict = {"ops": ops}
+    plan: dict[str, Any] = {"ops": ops}
     if order is not None:
         plan["order"] = order
     plan_path.write_text(json.dumps(plan))
@@ -196,8 +197,18 @@ def _reorder_entries(lines: list[str], order: list[str]) -> list[str]:
 
 # Verbs that can open a todo entry, long or single-letter form.
 _ENTRY_PREFIXES = (
-    "pick ", "p ", "drop ", "d ", "squash ", "s ",
-    "fixup ", "f ", "edit ", "e ", "reword ", "r ",
+    "pick ",
+    "p ",
+    "drop ",
+    "d ",
+    "squash ",
+    "s ",
+    "fixup ",
+    "f ",
+    "edit ",
+    "e ",
+    "reword ",
+    "r ",
 )
 
 
@@ -224,4 +235,3 @@ def _neighbour_entry(lines: list[str], idx: int, direction: int) -> int | None:
             return i
         i += direction
     return None
-

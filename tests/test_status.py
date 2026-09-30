@@ -6,22 +6,25 @@ from lazysnake.git.models import RepoSnapshot
 from lazysnake.git.runner import Git
 from lazysnake.git.status import parse_status
 
-FIXTURE = "\0".join(
-    [
-        "# branch.oid abcdef1234567890",
-        "# branch.head main",
-        "# branch.upstream origin/main",
-        "# branch.ab +2 -1",
-        "1 M. N... 100644 100644 100644 h1 h2 staged-only.txt",
-        "1 .M N... 100644 100644 100644 h2 h2 unstaged-only.txt",
-        "1 MM N... 100644 100644 100644 h1 h2 both.txt",
-        "1 A. N... 000000 100644 100644 000000 h3 new-staged.txt",
-        "2 R. N... 100644 100644 100644 h4 h5 R100 renamed-new.txt",
-        "renamed-old.txt",
-        "u UU N... 000000 100644 100644 000000 h6 h7 h8 conflicted.txt",
-        "? untracked.txt",
-    ]
-) + "\0"
+FIXTURE = (
+    "\0".join(
+        [
+            "# branch.oid abcdef1234567890",
+            "# branch.head main",
+            "# branch.upstream origin/main",
+            "# branch.ab +2 -1",
+            "1 M. N... 100644 100644 100644 h1 h2 staged-only.txt",
+            "1 .M N... 100644 100644 100644 h2 h2 unstaged-only.txt",
+            "1 MM N... 100644 100644 100644 h1 h2 both.txt",
+            "1 A. N... 000000 100644 100644 000000 h3 new-staged.txt",
+            "2 R. N... 100644 100644 100644 h4 h5 R100 renamed-new.txt",
+            "renamed-old.txt",
+            "u UU N... 000000 100644 100644 000000 h6 h7 h8 conflicted.txt",
+            "? untracked.txt",
+        ]
+    )
+    + "\0"
+)
 
 
 def test_fixture_branch_header() -> None:

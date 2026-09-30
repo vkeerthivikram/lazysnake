@@ -123,6 +123,50 @@ def test_partial_hunk_patch() -> None:
     assert reparsed[0].hunks[0].additions == 2
 
 
+def test_parse_cap_keeps_only_complete_hunks_and_marks_truncation() -> None:
+    raw = """\
+diff --git a/big.txt b/big.txt
+--- a/big.txt
++++ b/big.txt
+@@ -1,0 +1,4 @@
++oversized-1
++oversized-2
++oversized-3
++oversized-4
+@@ -20,0 +25,1 @@
++visible
+"""
+
+    files = parse_diff(raw, max_rows=3)
+
+    assert len(files) == 1
+    assert files[0].truncated
+    assert [line.content for line in files[0].hunks[0].lines] == ["visible"]
+    retained_rows = sum(1 + len(hunk.lines) for hunk in files[0].hunks)
+    assert retained_rows <= 3
+    patch = files[0].to_patch()
+    assert "visible" in patch
+    assert "oversized" not in patch
+
+
+def test_parse_truncated_output_discards_incomplete_hunk() -> None:
+    raw = """\
+diff --git a/large.txt b/large.txt
+--- a/large.txt
++++ b/large.txt
+@@ -1,1 +1,3 @@
+-old
++new-1
++new-2
+"""
+
+    files = parse_diff(raw, truncated=True)
+
+    assert len(files) == 1
+    assert files[0].truncated
+    assert files[0].hunks == []
+
+
 async def test_live_diff_and_apply_roundtrip(repo) -> None:
     """A rebuilt patch must be accepted by ``git apply --cached``."""
     git = Git(repo.root)
