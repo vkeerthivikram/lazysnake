@@ -39,6 +39,7 @@ class RemoteActions:
         _checkpoint: Callable[..., Any]
         _remote_for: Callable[..., Any]
         refresh_state: Callable[..., Any]
+        _refreshed: Callable[..., Any]
 
     async def run_git_stream(self, *args: str) -> int:
         """Run git with live output streaming into the command log.
@@ -73,11 +74,11 @@ class RemoteActions:
         if code != 0:
             self.notify("Fetch failed — see command log", severity="error", timeout=10)
             self._last_status_raw = None
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return code
         self.notify("Fetched")
         self._last_status_raw = None
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
         return 0
 
     @work(exclusive=True, group="action")
@@ -89,11 +90,11 @@ class RemoteActions:
         if code != 0:
             self.notify("Pull failed — see command log", severity="error", timeout=10)
             self._last_status_raw = None
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return code
         self.notify("Pulled")
         self._last_status_raw = None
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
         return 0
 
     def action_fetch(self) -> None:
@@ -127,9 +128,9 @@ class RemoteActions:
         if code != 0:
             self.notify("Push failed — see command log", severity="error", timeout=10)
             self._last_status_raw = None
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return code
         self.notify("Pushed")
         self._last_status_raw = None
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
         return 0

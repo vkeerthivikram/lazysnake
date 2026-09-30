@@ -49,6 +49,7 @@ class WorktreeActions:
         confirm: Callable[..., Any]
         _notify_error: Callable[..., Any]
         refresh_state: Callable[..., Any]
+        _refreshed: Callable[..., Any]
 
     def switch_repo(self, path: str) -> None:
         """Relaunch lazysnake inside another repository."""
@@ -185,7 +186,7 @@ class WorktreeActions:
             self._notify_error("submodule add", err)
             return
         self.notify(f"Submodule added at {path}")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     @work(exclusive=True, group="action")
     async def submodule_deinit(self, path: str) -> None:

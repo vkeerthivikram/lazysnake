@@ -49,6 +49,7 @@ class SearchActions:
         toggle_stage: Callable[..., Any]
         action_focus_panel: Callable[..., Any]
         refresh_state: Callable[..., Any]
+        _refreshed: Callable[..., Any]
 
     # filters -----------------------------------------------------------
 
@@ -143,7 +144,7 @@ class SearchActions:
                 await self.toggle_stage(entry, staged_view=False).wait()
         # Focus the Files panel on just this file; `/` with empty text clears.
         self.files_filter = sel.path
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
         self.action_focus_panel("files")
         await self._land_cursor(sel.path, sel.line)
 

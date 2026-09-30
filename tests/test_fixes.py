@@ -670,3 +670,42 @@ async def test_filter_key_opens_prefilled_input_screen(repo) -> None:
         await pilot.pause()
         assert isinstance(app.screen, InputScreen)
         assert app.screen.query_one("#input-field", Input).value == ""
+
+
+# ------------------------------------------------------- CI stability fixes
+
+
+async def test_poll_skips_while_refresh_in_flight(repo) -> None:
+    """The poll timer must not cancel a running refresh (exclusive group);
+    on slow CI machines that killed live actions with WorkerCancelled."""
+    app = LazysnakeApp(Git(repo.root))
+    async with app.run_test() as pilot:
+        await app.refresh_state().wait()
+        await pilot.pause()
+        calls: list[bool] = []
+        app.refresh_state = lambda force=False: calls.append(force)  # type: ignore[method-assign]
+        app._refresh_running = True
+        app._poll_status()
+        assert calls == []  # refresh busy: this tick is skipped
+        app._refresh_running = False
+        app._poll_status()
+        assert calls == [False]  # idle: poll refreshes again
+
+
+async def test_refreshed_swallows_superseded_refresh(repo) -> None:
+    """_refreshed treats WorkerCancelled as success: a newer refresh
+    (poll or newer action) supersedes the awaited one and lands the same
+    state — the action worker must not die with WorkerFailed."""
+    from textual.worker import WorkerCancelled
+
+    app = LazysnakeApp(Git(repo.root))
+
+    class _CancelledWorker:
+        async def wait(self) -> None:
+            raise WorkerCancelled("superseded")
+
+    def fake_refresh(force: bool = True) -> _CancelledWorker:
+        return _CancelledWorker()
+
+    app.refresh_state = fake_refresh  # type: ignore[method-assign]
+    await app._refreshed()  # must not raise

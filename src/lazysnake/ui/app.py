@@ -20,6 +20,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer
+from textual.worker import WorkerCancelled
 
 from lazysnake.config import Config, CustomCommand, load_config
 from lazysnake.git.branch import FORMAT as BRANCH_FORMAT
@@ -137,6 +138,7 @@ class LazysnakeApp(
         self._last_snapshot_commit: str | None = None
         self._file_write_lock = asyncio.Lock()
         self._last_status_raw: str | None = None
+        self._refresh_running = False
         self.main_source = "files"
         self._editor_task = None
 
@@ -182,6 +184,13 @@ class LazysnakeApp(
         ``force`` bypasses the status-unchanged fast path (needed when
         branches, the log, or the stash changed while status did not).
         """
+        self._refresh_running = True
+        try:
+            await self._refresh_state_body(force)
+        finally:
+            self._refresh_running = False
+
+    async def _refresh_state_body(self, force: bool) -> None:
         try:
             data = await self.git.run("status", "--porcelain=v2", "--branch", "-z")
         except GitError as err:
@@ -251,8 +260,31 @@ class LazysnakeApp(
         # Any modal owns the screen (whatever its class); never mutate the
         # panels underneath it. isinstance keeps this true for modals
         # added after this check was written.
-        if not isinstance(self.screen, ModalScreen):
-            self.refresh_state()
+        if isinstance(self.screen, ModalScreen):
+            return
+        # Never trample an in-flight refresh: the exclusive worker group
+        # would cancel it — and the action awaiting it — just to re-read
+        # the same state. On slow machines (CI runners, big repos) the
+        # poll timer fired mid-refresh and killed live actions. Skip this
+        # beat instead; the next tick catches up.
+        if self._refresh_running:
+            return
+        self.refresh_state()
+
+    async def _refreshed(self, force: bool = True) -> None:
+        """Await a forced refresh, tolerating supersession.
+
+        A newer ``refresh_state`` (poll timer or a newer action) cancels
+        the awaited one through the exclusive group — which ``Worker.wait``
+        reports as ``WorkerCancelled``. For the caller that is success:
+        the newer refresh lands the same (or fresher) state. Actions used
+        to crash with WorkerFailed instead, on any machine where a full
+        refresh outlasted the poll interval.
+        """
+        try:
+            await self.refresh_state(force=force).wait()
+        except WorkerCancelled:
+            pass
 
     # ------------------------------------------------------------ logged git
 
@@ -322,11 +354,11 @@ class LazysnakeApp(
             if hint:
                 self.notify(hint, timeout=10)
             if refresh_on_error:
-                await self.refresh_state(force=True).wait()
+                await self._refreshed()
             return False
         if success is not None:
             self.notify(success)
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
         return True
 
     def confirm(self, prompt: str, on_ok: Callable[[], object]) -> None:
@@ -402,7 +434,7 @@ class LazysnakeApp(
         self._undo_stack.pop()
         self._redo_stack.append(current)
         self.notify("Undone — state restored")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     def action_redo(self) -> None:
         if not self._redo_stack:
@@ -439,7 +471,7 @@ class LazysnakeApp(
         self._redo_stack.pop()
         self._undo_stack.append(current)
         self.notify("Redone — state restored")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     async def _rollback_snapshot(self, snapshot: Snapshot) -> Exception | None:
         """Finish restoring a recovery snapshot even if this worker is cancelled."""
@@ -545,7 +577,7 @@ class LazysnakeApp(
                 timeout=8,
             )
         self._last_status_raw = None
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
 
 # The app class above declares ACTIONS; keys come from the keymap, and the

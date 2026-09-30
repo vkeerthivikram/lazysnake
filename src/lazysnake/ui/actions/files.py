@@ -61,6 +61,7 @@ class FilesActions:
         _file_write_lock: asyncio.Lock
         confirm: Callable[..., Any]
         refresh_state: Callable[..., Any]
+        _refreshed: Callable[..., Any]
 
     # partial staging ---------------------------------------------------------
 
@@ -197,7 +198,7 @@ class FilesActions:
             self._notify_error(f"resolve ({side})", err)
             return
         self.notify(f"Resolved {entry.path} with {side}")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     # files extras --------------------------------------------------------------
 
@@ -222,7 +223,7 @@ class FilesActions:
             self.notify(f"could not update .gitignore: {err}", severity="error")
             return
         self.notify(f"Ignored {entry.path}")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     @work(exclusive=True, group="action")
     async def open_in_editor(self, path: str) -> None:

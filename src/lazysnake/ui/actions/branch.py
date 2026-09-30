@@ -37,6 +37,7 @@ class BranchActions:
         mutate: Callable[..., Any]
         confirm: Callable[..., Any]
         refresh_state: Callable[..., Any]
+        _refreshed: Callable[..., Any]
 
     @work(exclusive=True, group="action")
     async def checkout_branch(self, branch: Branch) -> None:

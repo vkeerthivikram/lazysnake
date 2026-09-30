@@ -46,6 +46,11 @@ def repo(tmp_path: Path) -> RepoHelper:
     helper.git("config", "user.email", "test@example.com")
     helper.git("config", "user.name", "Test Snake")
     helper.git("config", "commit.gpgsign", "false")
+    # Windows runners default core.autocrlf=true, which rewrites every
+    # fixture file to CRLF and turns the tests' LF expectations into
+    # line-ending-only diffs. Pin LF semantics everywhere.
+    helper.git("config", "core.autocrlf", "false")
+    helper.git("config", "core.eol", "lf")
     helper.write("README.md", "initial\n")
     helper.commit_all("initial commit")
     return helper
@@ -69,6 +74,8 @@ def remote_repo(tmp_path: Path) -> RepoHelper:
     helper.git("config", "user.email", "test@example.com")
     helper.git("config", "user.name", "Test Snake")
     helper.git("config", "commit.gpgsign", "false")
+    helper.git("config", "core.autocrlf", "false")
+    helper.git("config", "core.eol", "lf")
     helper.write("README.md", "initial\n")
     helper.commit_all("initial commit")
     helper.git("remote", "add", "origin", str(origin))

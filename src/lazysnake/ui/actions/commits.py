@@ -49,6 +49,7 @@ class CommitsActions:
         _checkpoint: Callable[..., Any]
         _notify_error: Callable[..., Any]
         refresh_state: Callable[..., Any]
+        _refreshed: Callable[..., Any]
 
     # commit ----------------------------------------------------------------
 
@@ -149,10 +150,10 @@ class CommitsActions:
         except GitError as err:
             self._notify_error(f"rebase {op}", err)
             self.notify("Fix conflicts or press K to abort the rebase", timeout=10)
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return
         self.notify(f"Rebase done ({op} {commit.short_sha})")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     def action_rebase_continue(self) -> None:
         """Smart continue: finishes whichever sequencer is in progress
@@ -186,7 +187,7 @@ class CommitsActions:
                 self._notify_error(f"{label} continue", err)
                 return
         self.notify(f"{label} continued")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     def action_rebase_abort(self) -> None:
         self.confirm(
@@ -234,10 +235,10 @@ class CommitsActions:
         except GitError as err:
             self._notify_error("reword", err)
             self.notify("Fix conflicts or press K to abort the rebase", timeout=10)
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return
         self.notify(f"Reworded {commit.short_sha}")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     @work(exclusive=True, group="action")
     async def fixup_commit(self, commit: Commit) -> None:
@@ -260,10 +261,10 @@ class CommitsActions:
         except GitError as err:
             self._notify_error(direction, err)
             self.notify("Fix conflicts or press K to abort the rebase", timeout=10)
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return
         self.notify(f"Moved commit {'up' if direction == 'move-up' else 'down'}")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     async def _anchor_base(self, commit: Commit) -> list[str]:
         """Todo base that includes the commit's parent as an anchor."""
@@ -295,7 +296,7 @@ class CommitsActions:
                 break
         else:
             self.notify(f"Marked {commit.short_sha} {verdict}")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     def request_bisect_reset(self) -> None:
         if not self.snapshot.bisecting:
@@ -364,10 +365,10 @@ class CommitsActions:
         except GitError as err:
             self._notify_error("rebase", err)
             self.notify("Fix conflicts or press K to abort the rebase", timeout=10)
-            await self.refresh_state(force=True).wait()
+            await self._refreshed()
             return
         self.notify("Rebase done")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     # patch copy mode ---------------------------------------------------------
 
@@ -428,10 +429,10 @@ class CommitsActions:
                     severity="error",
                     timeout=10,
                 )
-                await self.refresh_state(force=True).wait()
+                await self._refreshed()
                 return
         self.notify(f"Applied {applied} commit patch(es) to the worktree")
-        await self.refresh_state(force=True).wait()
+        await self._refreshed()
 
     @work(exclusive=True, group="action")
     async def patch_cherry(self) -> None:
