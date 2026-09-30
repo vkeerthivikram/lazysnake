@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual import work
+from textual.app import ScreenStackError
 from textual.widgets import ListView
 
 from lazysnake.git.diff import parse_diff
@@ -252,7 +253,13 @@ class MainViewMixin:
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         # The main view follows the *focused* panel; background repopulation
         # (e.g. refreshing the commit log) must not steal it.
-        if event.list_view is not self.focused or event.item is None:
+        try:
+            focused = self.focused
+        except ScreenStackError:
+            # Teardown window: the screen stack is gone but queued
+            # highlight events still arrive. Nothing to follow then.
+            return
+        if event.list_view is not focused or event.item is None:
             return
         sources = {
             id(self.files_panel): "files",

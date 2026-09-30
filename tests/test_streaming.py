@@ -29,7 +29,7 @@ async def test_push_streams_into_command_log(remote_repo) -> None:
         await pilot.pause()
         code = await app.push(set_upstream=True).wait()
         await pilot.pause()
-        assert code == 0
+        assert code == 0, f"push failed with exit {code}; log:\n{_log_text(app)}"
         log = _log_text(app)
         assert "▸ git push --progress" in log
         assert "main -> main" in log  # streamed line, not just the header

@@ -79,7 +79,7 @@ async def test_submodule_add_via_app(repo, tmp_path: Path, eventually) -> None:
         await eventually(lambda: "libs/fresh" in app.submodules)
 
 
-async def test_submodule_deinit_via_app(repo, tmp_path: Path, eventually) -> None:
+async def test_submodule_deinit_via_app(repo, tmp_path: Path) -> None:
     sub = tmp_path / "sublib"
     _make_sub(sub)
     _add_submodule(repo, sub)
@@ -89,8 +89,26 @@ async def test_submodule_deinit_via_app(repo, tmp_path: Path, eventually) -> Non
         await app.refresh_state().wait()
         await pilot.pause()
         await app.submodule_deinit("vendor/lib").wait()
-        # Worktree copy gone, .gitmodules still references it.
-        await eventually(lambda: not (repo.root / "vendor" / "lib" / "lib.txt").exists())
+        # Worktree copy gone, .gitmodules still references it. Bounded
+        # inline wait; on failure dump the real git state for diagnosis.
+        import asyncio as _asyncio
+
+        target = repo.root / "vendor" / "lib" / "lib.txt"
+        for _ in range(300):
+            if not target.exists():
+                break
+            await _asyncio.sleep(0.05)
+        else:
+            log = "\n".join(line.text for line in app.command_log.lines)
+            status = subprocess.run(
+                ["git", "-C", str(repo.root), "submodule", "status"],
+                capture_output=True,
+                text=True,
+            )
+            raise AssertionError(
+                "deinit did not remove the worktree;\n"
+                f"submodule status: {status.stdout}\ncommand log:\n{log}"
+            )
         assert (repo.root / ".gitmodules").exists()
 
 
