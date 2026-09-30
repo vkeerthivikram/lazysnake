@@ -177,14 +177,23 @@ class LazysnakeApp(
 
     # ----------------------------------------------------------------- refresh
 
-    @work(exclusive=True, group="refresh")
-    async def refresh_state(self, force: bool = False) -> None:
+    def refresh_state(self, force: bool = False) -> Any:
         """Re-read repository state and repopulate every panel.
 
         ``force`` bypasses the status-unchanged fast path (needed when
         branches, the log, or the stash changed while status did not).
+
+        The in-flight flag is set synchronously at call time — inside the
+        worker coroutine it would only appear once the coroutine starts
+        running, leaving a scheduling window where the poll timer could
+        still cancel this refresh (and whoever awaited it) via the
+        exclusive group.
         """
         self._refresh_running = True
+        return self._refresh_state_worker(force)
+
+    @work(exclusive=True, group="refresh")
+    async def _refresh_state_worker(self, force: bool) -> None:
         try:
             await self._refresh_state_body(force)
         finally:
@@ -295,7 +304,19 @@ class LazysnakeApp(
         actions lazysnake itself performs (reads dedupe to nothing).
         """
         if checkpoint:
-            await self._checkpoint()
+            try:
+                await self._checkpoint()
+            except GitError as err:
+                # Fail closed: the mutation must not run on an incomplete
+                # snapshot. Log the checkpoint failure like any other —
+                # a toast alone left Windows submodule repos with an
+                # empty command log and no named cause.
+                self.command_log.write_command(
+                    "checkpoint (snapshot failed; action blocked)",
+                    ok=False,
+                    detail=str(err)[:300],
+                )
+                raise
         if kwargs.get("max_output_bytes") is not None:
             raise ValueError("bounded output is only supported by Git.run, not logged mutations")
         display = "git " + " ".join(args)
